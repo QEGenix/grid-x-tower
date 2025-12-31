@@ -5,12 +5,20 @@ import pandas as pd
 
 # --- 1. THE PERCEPTION LAYER (Market & News) ---
 def get_market_context(ticker):
-    """Fetches real-time price data and news headlines."""
+    """Fetches real-time price data and news headlines with safety checks."""
     stock = yf.Ticker(ticker)
-    # Fetch 1-minute interval data for the last day
+    # Fetch 1-minute interval data
     df = stock.history(period="1d", interval="1m")
+    
+    # SAFE NEWS FETCHING
     news_items = stock.news[:5]
-    headlines = [item['title'] for item in news_items]
+    headlines = []
+    for item in news_items:
+        # Use .get() to avoid KeyError if 'title' is missing
+        title = item.get('title')
+        if title:
+            headlines.append(title)
+            
     return df, headlines
 
 def fetch_news_sentiment(ticker, headlines):
