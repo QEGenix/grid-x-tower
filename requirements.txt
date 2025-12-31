@@ -1,4 +1,5 @@
 streamlit
-yfinance
 groq
+nsepython
+requests
 pandas
