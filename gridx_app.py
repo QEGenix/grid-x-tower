@@ -3,108 +3,82 @@ import yfinance as yf
 from groq import Groq
 import pandas as pd
 
-# --- 1. THE PERCEPTION LAYER (Market & News) ---
-def get_market_context(ticker):
-    """Fetches real-time price data and news headlines with safety checks."""
-    stock = yf.Ticker(ticker)
-    # Fetch 1-minute interval data
-    df = stock.history(period="1d", interval="1m")
-    
-    # SAFE NEWS FETCHING
-    news_items = stock.news[:5]
-    headlines = []
-    for item in news_items:
-        # Use .get() to avoid KeyError if 'title' is missing
-        title = item.get('title')
-        if title:
-            headlines.append(title)
-            
-    return df, headlines
+# --- SYSTEM INITIALIZATION ---
+st.set_page_config(page_title="Grid-x 2.0 India", layout="wide")
 
-def fetch_news_sentiment(ticker, headlines):
-    """Asks Groq to analyze headlines and return a sentiment score."""
-    if not headlines:
-        return 0.0, "No recent news found."
+def format_indian_ticker(symbol):
+    """Ensures the ticker is ready for NSE/BSE sensors."""
+    symbol = symbol.upper().strip()
+    if not (symbol.endswith(".NS") or symbol.endswith(".BO")):
+        # Defaulting to NSE as it has higher liquidity for Options
+        return f"{symbol}.NS"
+    return symbol
 
-    client = Groq(api_key=st.secrets["GROQ_API_KEY"])
-    headlines_text = "\n".join(headlines)
-    
-    prompt = f"""
-    Analyze the following news headlines for {ticker}:
-    {headlines_text}
-    
-    Provide a sentiment score between -1.0 (Very Bearish) and 1.0 (Very Bullish). 
-    Output ONLY the score followed by a one-sentence summary.
-    Format: [Score] | [Summary]
-    """
-    
-    response = client.chat.completions.create(
-        model="llama-3.3-70b-versatile",
-        messages=[{"role": "user", "content": prompt}]
-    )
-    
-    result = response.choices[0].message.content
+def fetch_indian_options(ticker_symbol):
+    """Fetches the Option Chain for Indian FnO stocks."""
     try:
-        score = float(result.split('|')[0].strip().replace('[', '').replace(']', ''))
-        summary = result.split('|')[1].strip()
-    except:
-        score = 0.0
-        summary = "Neutral (Could not parse score)"
+        stock = yf.Ticker(ticker_symbol)
+        expiries = stock.options
+        if not expiries:
+            return None, "No Options found. Ensure the stock is in the FnO list."
         
-    return score, summary
+        # Get the nearest expiry (current month)
+        chain = stock.option_chain(expiries[0])
+        return chain, expiries[0]
+    except Exception as e:
+        return None, str(e)
 
-# --- 2. THE COGNITIVE LAYER (Strategy Brain) ---
-def get_agent_strategy(price, sentiment_summary, ticker):
-    """Generates the final Grid Trading strategy with a secret check."""
-    # Safety Check: Check if the key exists before trying to use it
-    if "GROQ_API_KEY" not in st.secrets:
-        st.error("🚨 Groq API Key is missing! Please add GROQ_API_KEY to your Streamlit Secrets.")
-        st.stop() # Stops the app from crashing with a KeyError
+# --- THE PERCEPTION LAYER (GROQ) ---
+def get_sentiment_analysis(symbol, headlines):
+    if not headlines:
+        return 0, "NEUTRAL (No recent news found on Yahoo Finance India)"
     
     client = Groq(api_key=st.secrets["GROQ_API_KEY"])
-    # ... rest of your code ...
+    news_block = "\n".join(headlines[:5]) # Top 5 headlines
+    
+    prompt = f"Analyze these Indian market headlines for {symbol}: {news_block}. Return a score from -1 to 1 and a 10-word summary."
+    # ... Groq Chat Completion logic here ...
+    return 0.8, "Bullish momentum seen in Indian Bluechips." # Placeholder
 
-# --- 3. THE INTERFACE LAYER (Control Tower UI) ---
-st.set_page_config(page_title="Grid-x 2.0 Tower", layout="wide")
-st.title("🛰️ Grid-x 2.0: Agentic Control Tower")
+# --- UI ARCHITECTURE ---
+st.title("🛰️ Agentic Control Tower: India Edition")
+st.sidebar.header("Target Selection")
 
-# Sidebar for Inputs
-st.sidebar.header("Mission Parameters")
-symbol = st.sidebar.text_input("Enter Ticker", value="NVDA").upper()
+raw_symbol = st.sidebar.text_input("NSE Symbol (e.g., RELIANCE, NIFTY_50)", "RELIANCE")
+symbol = format_indian_ticker(raw_symbol)
 
 if st.sidebar.button("🚀 START MISSION"):
-    with st.status("Initializing Grid-x Sensors...", expanded=True) as status:
-        # Step 1: Sense
-        df, headlines = get_market_context(symbol)
-        last_price = df['Close'].iloc[-1]
-        st.write("✅ Market Data Ingested")
+    with st.spinner(f"Scanning {symbol}..."):
+        # 1. Price Data
+        data = yf.download(symbol, period="5d", interval="15m")
+        current_price = data['Close'].iloc[-1]
         
-        # Step 2: Analyze News
-        sentiment_score, sentiment_summary = fetch_news_sentiment(symbol, headlines)
-        st.write("✅ Sentiment Pulse Captured")
+        # 2. Options Pulse
+        chain, expiry = fetch_indian_options(symbol)
         
-        # Step 3: Formulate Strategy
-        strategy = get_agent_strategy(last_price, sentiment_summary, symbol)
-        st.write("✅ Strategy Optimized")
-        status.update(label="Mission Analysis Complete!", state="complete", expanded=False)
+        col1, col2, col3 = st.columns(3)
+        with col1:
+            st.metric("Current Price", f"₹{current_price:,.2f}")
+        with col2:
+            st.metric("Market", "NSE (India)")
+        with col3:
+            st.metric("Expiry Tracked", expiry if expiry else "N/A")
 
-    # --- DISPLAY RESULTS ---
-    col1, col2 = st.columns([2, 1])
-
-    with col1:
-        st.subheader(f"📈 {symbol} Price Action")
-        st.line_chart(df['Close'])
-        
-    with col2:
-        st.subheader("🤖 Sentiment Pulse")
-        if sentiment_score > 0.2:
-            st.success(f"BULLISH ({sentiment_score})")
-        elif sentiment_score < -0.2:
-            st.error(f"BEARISH ({sentiment_score})")
+        # 3. Sentiment & Grid Strategy
+        st.subheader("📊 Tactical Analysis")
+        if chain:
+            # Show Call vs Put Open Interest (Simplified)
+            calls_oi = chain.calls['openInterest'].sum()
+            puts_oi = chain.puts['openInterest'].sum()
+            pcr = puts_oi / calls_oi if calls_oi > 0 else 0
+            
+            st.write(f"**Put-Call Ratio (PCR):** {pcr:.2f}")
+            if pcr > 1:
+                st.success("Target Status: BULLISH (High Put Writing detected)")
+            else:
+                st.warning("Target Status: CAUTIOUS (Call Resistance ahead)")
+            
+            # Show the Option Chain Table
+            st.dataframe(chain.calls[['strike', 'lastPrice', 'openInterest']].head(5), use_container_width=True)
         else:
-            st.warning(f"NEUTRAL ({sentiment_score})")
-        st.caption(sentiment_summary)
-
-    st.divider()
-    st.subheader("🎮 Pilot's Strategic Recommendation")
-    st.info(strategy)
+            st.info("This ticker is not in the FnO segment. Running Equity-only analysis.")
