@@ -2,88 +2,88 @@ import streamlit as st
 import pandas as pd
 import yfinance as yf
 import numpy as np
-from scipy.stats import norm
 from streamlit_autorefresh import st_autorefresh
 import datetime
 
-# --- 1. THE PERCEPTION PULSE ---
-# Keeps the tower alive and scanning every 60 seconds
+# --- 1. SYSTEM PULSE ---
 st_autorefresh(interval=60 * 1000, key="gridx_pulse")
+st.set_page_config(page_title="Grid-x Decision Engine", layout="wide")
 
-# --- 2. CONFIGURATION & COGNITION ---
-st.set_page_config(page_title="Grid-x 2.0 Tower", layout="wide", page_icon="🛰️")
+# --- 2. THE SMART MAPPER ---
+def resolve_ticker(user_input):
+    mapping = {
+        "NIFTY": "^NSEI", "BANKNIFTY": "^NSEBANK", "SENSEX": "^BSESN",
+        "FINNIFTY": "NIFTY_FIN_SERVICE.NS", "MIDCAP": "^NSEMDCP50"
+    }
+    val = user_input.upper().strip()
+    if val in mapping: return mapping[val]
+    if val.startswith("^") or "." in val: return val
+    return f"{val}.NS"
 
-def calculate_synthetic_greeks(S, K, T, r, sigma):
-    """Synthetic Engine for confidence intervals."""
-    if T <= 0: return 0, 0
-    d1 = (np.log(S / K) + (r + 0.5 * sigma ** 2) * T) / (sigma * np.sqrt(T))
-    delta = norm.cdf(d1)
-    gamma = norm.pdf(d1) / (S * sigma * np.sqrt(T))
-    return round(delta, 2), round(gamma, 5)
+# --- 3. PREDICTION & SIGNAL LOGIC ---
+def get_trade_signals(price, pivot, s1, r1):
+    """Generates Buy/Sell logic based on current price position."""
+    if price > r1:
+        return "🔴 SELL / OVERBOUGHT", "Price is above Resistance. High risk of reversal. Book profits."
+    elif price < s1:
+        return "🟢 BUY / OVERSOLD", "Price is at Support. High probability of bounce. Enter Long."
+    elif price > pivot:
+        return "🟡 HOLD / BULLISH", "Strong momentum. Stay in trade, but don't enter fresh here."
+    else:
+        return "⚪ WAIT / BEARISH", "Price is below Pivot. Wait for a clear reversal signal."
 
-# --- 3. THE CONTROL TOWER UI ---
-st.title("🛰️ Grid-x 2.0: Agentic Control Tower")
-st.caption(f"Status: **Monitoring Live** | Last Sync: {datetime.datetime.now().strftime('%H:%M:%S')}")
-
-with st.sidebar:
-    st.header("🎯 Mission Parameters")
-    target = st.text_input("NSE Symbol (e.g., TCS, RELIANCE)", "TCS").upper()
-    st.divider()
-    st.info("Agentic Logic: Auto-refreshing every 60s. Calculating Synthetic Greeks for Decision Support.")
-
-# --- 4. DATA INGESTION ---
-ticker_sym = f"{target}.NS"
-ticker = yf.Ticker(ticker_sym)
+# --- 4. THE CONTROL TOWER UI ---
+st.title("🛰️ Grid-x 2.0: Decision Engine")
+target_input = st.sidebar.text_input("Enter Symbol (e.g. NIFTY, TCS, ^BSESN)", "NIFTY")
+ticker_sym = resolve_ticker(target_input)
 
 try:
-    # Capturing 1-minute interval data for live momentum
-    hist = ticker.history(period="1d", interval="1m")
+    # Fetching 2 days to get a reliable 'yesterday' close and 'today' open
+    data = yf.download(ticker_sym, period="2d", interval="1m", progress=False)
     
-    if not hist.empty:
-        price = hist['Close'].iloc[-1]
-        day_open = hist['Open'].iloc[0]
-        vola = hist['Close'].pct_change().std() * np.sqrt(252 * 375) # Real-time vol proxy
+    if not data.empty:
+        curr_price = data['Close'].iloc[-1]
+        day_high = data['High'].max()
+        day_low = data['Low'].min()
         
-        # 🏯 P&L WAR ROOM (Top Metrics)
+        # Calculate Tactical Levels
+        pivot = (day_high + day_low + curr_price) / 3
+        r1 = (2 * pivot) - day_low
+        s1 = (2 * pivot) - day_high
+        
+        # 🏯 P&L WAR ROOM
         m1, m2, m3 = st.columns(3)
-        m1.metric("Live Spot", f"₹{price:.2f}", f"{price - day_open:.2f}")
-        m2.metric("Intraday Vol", f"{vola:.2f}%")
+        m1.metric(f"LIVE: {target_input}", f"₹{curr_price:.2f}")
         
-        # COGNITION: REGIME DETECTION
-        pivot = (hist['High'].max() + hist['Low'].min() + price) / 3
-        bias = "BULLISH (Long Grid)" if price > pivot else "BEARISH (Hedged Short)"
-        m3.metric("Agentic Bias", bias)
+        # ⚡ LIVE PREDICTION SIGNAL
+        signal, advice = get_trade_signals(curr_price, pivot, s1, r1)
+        m2.metric("CURRENT SIGNAL", signal)
+        m3.metric("PIVOT LEVEL", f"₹{pivot:.2f}")
 
-        # 📊 PREDICTIVE ACTION GRID
-        st.subheader("🔮 Predictive Analytics Grid (7-Day Expiry Simulation)")
-        
-        # Generate strikes around spot
-        strikes = [round(price * (1 + x), -1) for x in [-0.02, -0.01, 0, 0.01, 0.02]]
-        grid_data = []
-        for k in strikes:
-            d, g = calculate_synthetic_greeks(price, k, 7/365, 0.07, 0.20)
-            grid_data.append({
-                "Strike": k, 
-                "Delta (Prob)": d, 
-                "Gamma (Accel)": g,
-                "Action": "BUY/SUPPORT" if k < price else "SELL/RESIST"
-            })
-        
-        st.table(pd.DataFrame(grid_data))
+        st.info(f"💡 **Agent Advice:** {advice}")
 
-        # ⚡ EXECUTION PATH
-        st.subheader("⚡ Strategy Execution Logic")
-        col_exec1, col_exec2 = st.columns(2)
-        with col_exec1:
-            st.success(f"**Target Exit (R1):** ₹{hist['High'].max():.2f}")
-        with col_exec2:
-            st.error(f"**Safety Exit (S1):** ₹{hist['Low'].min():.2f}")
-            
+        # 📊 TACTICAL EXECUTION GRID (Stocks)
+        st.subheader("🎯 Tactical Execution (Equity/Cash)")
+        exec_df = pd.DataFrame({
+            "Action Type": ["Entry Zone (Buy)", "Exit Zone (Target)", "Hard Stop Loss"],
+            "Price": [f"₹{s1:.2f}", f"₹{r1:.2f}", f"₹{s1 * 0.995:.2f}"],
+            "Logic": ["Near Daily Support", "Near Daily Resistance", "0.5% below Support"]
+        })
+        st.table(exec_df)
+
+        # 💎 OPTIONS STRATEGY GRID
+        st.subheader("💎 Agentic Options Strategy (Next 60 Mins)")
+        atm = round(curr_price / 50) * 50 if "NIFTY" in ticker_sym else round(curr_price / 100) * 100
+        
+        opt_logic = "BULLISH" if curr_price > pivot else "BEARISH"
+        rec_strike = f"{atm + 50} CE" if opt_logic == "BULLISH" else f"{atm - 50} PE"
+        
+        st.write(f"**Market Sentiment:** {opt_logic} | **Recommended Action:** Buy {rec_strike}")
+
     else:
-        st.warning("Establishing Satellite Link... Please wait for market data.")
-        
-except Exception as e:
-    st.error(f"Connection Lost: {e}")
+        st.error(f"📡 Link Failed: '{ticker_sym}' not found. Please verify the ticker.")
 
-st.divider()
-st.caption("Grid-x 2.0: Predictive Market Architecture | Using Synthetic Perception for Restricted APIs")
+except Exception as e:
+    st.error(f"System Error: {e}")
+
+st.caption(f"Last Pulse: {datetime.datetime.now().strftime('%H:%M:%S')}")
