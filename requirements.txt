@@ -1,6 +1,6 @@
-streamlit
-pandas
-yfinance
-streamlit-autorefresh
-numpy
-scipy
+streamlit             # The UI Framework (Control Tower Dashboard)
+pandas                # Data Manipulation (The Grid Engine)
+yfinance              # Live Market Perception (Satellite Link)
+streamlit-autorefresh # The Pulse (Auto-refresh logic)
+numpy                 # High-speed Math (Volatility & Momentum)
+scipy                 # Statistical Logic (Synthetic Greeks / Black-Scholes)
