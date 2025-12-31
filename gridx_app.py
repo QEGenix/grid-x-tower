@@ -55,25 +55,14 @@ def fetch_news_sentiment(ticker, headlines):
 
 # --- 2. THE COGNITIVE LAYER (Strategy Brain) ---
 def get_agent_strategy(price, sentiment_summary, ticker):
-    """Generates the final Grid Trading strategy."""
+    """Generates the final Grid Trading strategy with a secret check."""
+    # Safety Check: Check if the key exists before trying to use it
+    if "GROQ_API_KEY" not in st.secrets:
+        st.error("🚨 Groq API Key is missing! Please add GROQ_API_KEY to your Streamlit Secrets.")
+        st.stop() # Stops the app from crashing with a KeyError
+    
     client = Groq(api_key=st.secrets["GROQ_API_KEY"])
-    
-    prompt = f"""
-    Ticker: {ticker}
-    Current Price: ${price:.2f}
-    Market Sentiment: {sentiment_summary}
-    
-    Act as an Expert Grid Trading Agent. 
-    1. Should we be Aggressive or Conservative?
-    2. Suggest a 'Buy' grid level and a 'Sell' grid level.
-    3. Provide a brief 'Risk Warning' based on the sentiment.
-    """
-    
-    completion = client.chat.completions.create(
-        model="llama-3.3-70b-versatile",
-        messages=[{"role": "user", "content": prompt}]
-    )
-    return completion.choices[0].message.content
+    # ... rest of your code ...
 
 # --- 3. THE INTERFACE LAYER (Control Tower UI) ---
 st.set_page_config(page_title="Grid-x 2.0 Tower", layout="wide")
