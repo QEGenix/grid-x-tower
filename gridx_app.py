@@ -13,17 +13,16 @@ st_autorefresh(interval=120 * 1000, key="gridx_heartbeat")
 @st.cache_data(ttl=120)
 def fetch_multi_horizon(ticker_sym):
     try:
-        # Fetching 1m (Intraday), 1h (Short-Term), 1d (Long-Term)
+        # Intraday (1m), Short-Term (1h), Long-Term (1d)
         d_intra = yf.download(ticker_sym, period="1d", interval="1m", progress=False, auto_adjust=True)
-        d_short = yf.download(ticker_sym, period="1mo", interval="1h", progress=False, auto_adjust=True)
         d_long = yf.download(ticker_sym, period="1y", interval="1d", progress=False, auto_adjust=True)
-        vix = yf.download("^INDIAVIX", period="1d", interval="5m", progress=False, auto_adjust=True)
-        return d_intra, d_short, d_long, vix
-    except:
-        return None, None, None, None
+        d_vix = yf.download("^INDIAVIX", period="1d", interval="5m", progress=False, auto_adjust=True)
+        return d_intra, d_long, d_vix
+    except Exception as e:
+        return None, None, None
 
 def calculate_rsi(series, window=14):
-    if len(series) < window: return 50
+    if len(series) < window + 1: return 50
     delta = series.diff()
     gain = (delta.where(delta > 0, 0)).rolling(window=window).mean()
     loss = (-delta.where(delta < 0, 0)).rolling(window=window).mean()
@@ -34,97 +33,85 @@ def calculate_rsi(series, window=14):
 st.sidebar.title("🛡️ Safety Pilot")
 target_input = st.sidebar.text_input("Asset Symbol", "NIFTY").upper().strip()
 
-# Explicit mapping to differentiate Index vs Stock
-IS_INDEX = target_input in ["NIFTY", "BANKNIFTY", "SENSEX"]
+# Improved Mapping
 mapping = {"NIFTY": "^NSEI", "BANKNIFTY": "^NSEBANK", "SENSEX": "^BSESN"}
 ticker_sym = mapping.get(target_input, f"{target_input}.NS")
 
 try:
-    d_intra, d_short, d_long, d_vix = fetch_multi_horizon(ticker_sym)
+    d_intra, d_long, d_vix = fetch_multi_horizon(ticker_sym)
 
-    if d_intra is None or d_intra.empty or len(d_intra) < 2:
-        st.error(f"⚠️ No live data for '{target_input}'. Check if market is open.")
+    if d_intra is None or d_intra.empty or len(d_intra) < 1:
+        st.warning(f"📡 Waiting for Satellite Sync... Market data for {target_input} is not yet available.")
     else:
-        # --- DATA CLEANING (VWAP NaN FIX) ---
+        # --- DATA EXTRACTION & ZERO-DIVISION SHIELD ---
         def get_clean(df, col):
             data = df[col].iloc[:, 0] if isinstance(df[col], pd.DataFrame) else df[col]
-            return data.ffill().bfill() # Forward fill and backfill any NaNs
+            return data.ffill().bfill()
 
-        c_intra, v_intra = get_clean(d_intra, 'Close'), get_clean(d_intra, 'Volume')
-        c_short, c_long = get_clean(d_short, 'Close'), get_clean(d_long, 'Close')
+        c_intra = get_clean(d_intra, 'Close')
+        v_intra = get_clean(d_intra, 'Volume')
+        c_long = get_clean(d_long, 'Close')
         
         curr_p = float(c_intra.iloc[-1])
         
-        # Robust VWAP calculation
-        pvt = c_intra * v_intra
-        cumulative_pvt = pvt.cumsum()
-        cumulative_vol = v_intra.cumsum()
-        # Handle zero volume to avoid NaN
-        vwap_series = cumulative_pvt / cumulative_vol.replace(0, 1)
-        vwap = float(vwap_series.iloc[-1])
+        # FIXED VWAP CALCULATION (Prevents DivisionByZero)
+        cum_vol = v_intra.cumsum()
+        cum_pvt = (c_intra * v_intra).cumsum()
+        
+        # If volume is zero, we use the average price as a fallback
+        if cum_vol.iloc[-1] == 0:
+            vwap = c_intra.mean()
+        else:
+            vwap = float(cum_pvt.iloc[-1] / cum_vol.iloc[-1])
         
         rsi_intra = float(calculate_rsi(c_intra).iloc[-1])
         rsi_long = float(calculate_rsi(c_long).iloc[-1])
         vix = float(get_clean(d_vix, 'Close').iloc[-1]) if not d_vix.empty else 15.0
-        pcr_val = round(1.0 + (0.05 if rsi_long > 50 else -0.05), 2) # Simulated Sentiment
+        
+        # PCR Logic (Synthetic Sentiment)
+        pcr_val = round(1.02 if rsi_long > 55 else 0.96, 2)
 
-        # --- SIGNAL CALCULATOR ---
-        intra_bull = curr_p > vwap and rsi_intra > 50
-        intra_bear = curr_p < vwap and rsi_intra < 50
-        long_bull = curr_p > c_long.rolling(200).mean().iloc[-1]
+        # --- MULTI-HORIZON INTELLIGENCE ---
+        # 1. Stock Strategy (200-Day Trend)
+        ma200 = c_long.rolling(200).mean().iloc[-1]
+        stock_bull = curr_p > ma200
+        
+        # 2. Option Strategy (Intraday Momentum)
+        # We use a 0.05% buffer to reduce "No Trade" chop
+        intra_bull = curr_p > (vwap * 1.0005) and rsi_intra > 50
+        intra_bear = curr_p < (vwap * 0.9995) and rsi_intra < 50
 
         st.title(f"🛰️ Grid-x 2.0: {target_input} Tower")
 
-        # --- THE DISTINCTION SECTION ---
+        # --- THE CORE DISTINCTION ---
         col1, col2 = st.columns(2)
 
         with col1:
-            st.subheader("📦 STOCK & EQUITY (Delivery)")
-            status = "ACCUMULATE" if long_bull else "HOLD / EXIT"
-            s_col = "green" if long_bull else "red"
-            st.markdown(f"""<div style="background-color:{s_col}22; padding:20px; border-radius:10px; border:2px solid {s_col};">
-                <h2 style="color:{s_col}; margin:0;">{status}</h2>
-                <p style="margin:5px 0 0 0;"><b>Horizon:</b> 3+ Months</p>
-                <p style="font-size:0.8em;">Based on structural price-line vs 200DMA.</p>
+            st.subheader("📦 STOCK & EQUITY")
+            s_label = "ACCUMULATE (BULL)" if stock_bull else "HOLD / LIQUIDATE"
+            s_col = "green" if stock_bull else "red"
+            st.markdown(f"""<div style="background-color:{s_col}22; padding:20px; border-radius:12px; border:2px solid {s_col};">
+                <h2 style="color:{s_col}; margin:0;">{s_label}</h2>
+                <p style="margin:5px 0 0 0;"><b>Purpose:</b> Wealth Creation</p>
+                <p style="font-size:0.85em;">Signal based on the 200-Day Structural Baseline (₹{ma200:.2f}).</p>
             </div>""", unsafe_allow_html=True)
 
         with col2:
             st.subheader("⚡ DERIVATIVES (Options)")
-            # Smart strike calculation
             step = 50 if "NSEI" in ticker_sym else (100 if "NSEBANK" in ticker_sym else 10)
             strike = int(round(curr_p / step) * step)
             
             if intra_bull:
                 o_label, o_col = f"BUY {strike} CE", "green"
+                o_brief = "Momentum is breaking upside."
             elif intra_bear:
                 o_label, o_col = f"BUY {strike} PE", "red"
+                o_brief = "Momentum is breaking downside."
             else:
                 o_label, o_col = "NO TRADE", "orange"
+                o_brief = "Price is hugging VWAP (Chop)."
 
-            st.markdown(f"""<div style="background-color:{o_col}22; padding:20px; border-radius:10px; border:2px solid {o_col};">
+            st.markdown(f"""<div style="background-color:{o_col}22; padding:20px; border-radius:12px; border:2px solid {o_col};">
                 <h2 style="color:{o_col}; margin:0;">{o_label}</h2>
-                <p style="margin:5px 0 0 0;"><b>Horizon:</b> Intraday / Weekly</p>
-                <p style="font-size:0.8em;">Based on VWAP Momentum & RSI Acceleration.</p>
-            </div>""", unsafe_allow_html=True)
-
-        # --- METRICS & BRIEF ---
-        st.write("")
-        m1, m2, m3, m4 = st.columns(4)
-        m1.metric("Live Price", f"₹{curr_p:.2f}")
-        m2.metric("VWAP (Intra)", f"₹{vwap:.2f}", f"{((curr_p-vwap)/vwap*100):.2f}%")
-        m3.metric("PCR Sentiment", f"{pcr_val}")
-        m4.metric("Market Vol (VIX)", f"{vix:.2f}")
-
-        with st.expander("🧠 Agentic Intelligence Brief", expanded=True):
-            asset_type = "INDEX" if IS_INDEX else "INDIVIDUAL STOCK"
-            st.markdown(f"""
-            * **Identity:** Analyzing {target_input} as an **{asset_type}**.
-            * **Logic:** For **Stocks**, we prioritize capital safety. For **Options**, we prioritize "Delta" and "Theta" by following the {('Bullish' if intra_bull else 'Bearish' if intra_bear else 'Neutral')} intraday trend.
-            * **Alert:** {('Price is trending with volume support.' if curr_p > vwap else 'Price is decaying. Avoid long positions.')}
-            """)
-
-except Exception as e:
-    st.error(f"Satellite sync failed. Possible reasons: Market closed or invalid symbol. Error: {e}")
-
-st.divider()
-st.caption(f"Sync: {datetime.datetime.now().strftime('%H:%M:%S')} | QE Genix Master Architecture")
+                <p style="margin:5px 0 0 0;"><b>Purpose:</b> Daily Income / Hedge</p>
+                <p style="font-size:0.85em;">{
