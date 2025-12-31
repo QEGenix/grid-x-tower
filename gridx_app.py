@@ -1,84 +1,104 @@
 import streamlit as st
 import yfinance as yf
-from groq import Groq
 import pandas as pd
+import numpy as np
 
-# --- SYSTEM INITIALIZATION ---
-st.set_page_config(page_title="Grid-x 2.0 India", layout="wide")
+# --- SYSTEM CONFIGURATION ---
+st.set_page_config(page_title="Grid-x 2.0 India (FnO)", layout="wide")
 
 def format_indian_ticker(symbol):
-    """Ensures the ticker is ready for NSE/BSE sensors."""
     symbol = symbol.upper().strip()
+    # Special handling for common indices
+    indices = {"NIFTY": "^NSEI", "BANKNIFTY": "^NSEBANK", "FINNIFTY": "NIFTY_FIN_SERVICE.NS"}
+    if symbol in indices:
+        return indices[symbol]
     if not (symbol.endswith(".NS") or symbol.endswith(".BO")):
-        # Defaulting to NSE as it has higher liquidity for Options
         return f"{symbol}.NS"
     return symbol
 
-def fetch_indian_options(ticker_symbol):
-    """Fetches the Option Chain for Indian FnO stocks."""
-    try:
-        stock = yf.Ticker(ticker_symbol)
-        expiries = stock.options
-        if not expiries:
-            return None, "No Options found. Ensure the stock is in the FnO list."
-        
-        # Get the nearest expiry (current month)
-        chain = stock.option_chain(expiries[0])
-        return chain, expiries[0]
-    except Exception as e:
-        return None, str(e)
-
-# --- THE PERCEPTION LAYER (GROQ) ---
-def get_sentiment_analysis(symbol, headlines):
-    if not headlines:
-        return 0, "NEUTRAL (No recent news found on Yahoo Finance India)"
+def get_strike_suggestion(current_price, pcr, iv_mean):
+    """Suggests OTM strikes based on market sentiment."""
+    # Common Nifty/Stock strike step sizes
+    step = 50 if current_price > 10000 else 100 if current_price > 20000 else 5
+    atm_strike = round(current_price / step) * step
     
-    client = Groq(api_key=st.secrets["GROQ_API_KEY"])
-    news_block = "\n".join(headlines[:5]) # Top 5 headlines
-    
-    prompt = f"Analyze these Indian market headlines for {symbol}: {news_block}. Return a score from -1 to 1 and a 10-word summary."
-    # ... Groq Chat Completion logic here ...
-    return 0.8, "Bullish momentum seen in Indian Bluechips." # Placeholder
+    if pcr > 1.1: # Bullish setup
+        suggestion = {
+            "Action": "BULLISH (Sell Put / Buy Call)",
+            "Call Strike": atm_strike + step,
+            "Put Strike": atm_strike - step
+        }
+    elif pcr < 0.9: # Bearish setup
+        suggestion = {
+            "Action": "BEARISH (Sell Call / Buy Put)",
+            "Call Strike": atm_strike + step,
+            "Put Strike": atm_strike - step
+        }
+    else:
+        suggestion = {"Action": "NEUTRAL (Rangebound Grid)", "Call Strike": atm_strike + step, "Put Strike": atm_strike - step}
+    return suggestion
 
 # --- UI ARCHITECTURE ---
-st.title("🛰️ Agentic Control Tower: India Edition")
-st.sidebar.header("Target Selection")
+st.title("🇮🇳 Agentic Control Tower: India FnO")
+st.markdown("---")
 
-raw_symbol = st.sidebar.text_input("NSE Symbol (e.g., RELIANCE, NIFTY_50)", "RELIANCE")
-symbol = format_indian_ticker(raw_symbol)
+# Sidebar - Target Inputs
+with st.sidebar:
+    st.header("🎯 Target Parameters")
+    raw_symbol = st.text_input("Enter NSE Ticker", "NIFTY")
+    ticker = format_indian_ticker(raw_symbol)
+    lookback = st.selectbox("Lookback Period", ["1d", "5d", "1mo"])
+    run_mission = st.button("🚀 INITIALIZE SCAN")
 
-if st.sidebar.button("🚀 START MISSION"):
-    with st.spinner(f"Scanning {symbol}..."):
-        # 1. Price Data
-        data = yf.download(symbol, period="5d", interval="15m")
-        current_price = data['Close'].iloc[-1]
+if run_mission:
+    try:
+        # 1. DATA ACQUISITION
+        stock_obj = yf.Ticker(ticker)
+        hist = stock_obj.history(period="5d")
+        current_price = hist['Close'].iloc[-1]
         
-        # 2. Options Pulse
-        chain, expiry = fetch_indian_options(symbol)
-        
-        col1, col2, col3 = st.columns(3)
-        with col1:
-            st.metric("Current Price", f"₹{current_price:,.2f}")
-        with col2:
-            st.metric("Market", "NSE (India)")
-        with col3:
-            st.metric("Expiry Tracked", expiry if expiry else "N/A")
-
-        # 3. Sentiment & Grid Strategy
-        st.subheader("📊 Tactical Analysis")
-        if chain:
-            # Show Call vs Put Open Interest (Simplified)
-            calls_oi = chain.calls['openInterest'].sum()
-            puts_oi = chain.puts['openInterest'].sum()
-            pcr = puts_oi / calls_oi if calls_oi > 0 else 0
+        # 2. OPTION CHAIN SENSORS
+        expiries = stock_obj.options
+        if expiries:
+            nearest_expiry = expiries[0]
+            chain = stock_obj.option_chain(nearest_expiry)
             
-            st.write(f"**Put-Call Ratio (PCR):** {pcr:.2f}")
-            if pcr > 1:
-                st.success("Target Status: BULLISH (High Put Writing detected)")
-            else:
-                st.warning("Target Status: CAUTIOUS (Call Resistance ahead)")
+            # PCR Calculation (Open Interest based)
+            total_call_oi = chain.calls['openInterest'].sum()
+            total_put_oi = chain.puts['openInterest'].sum()
+            pcr = total_put_oi / total_call_oi if total_call_oi > 0 else 1.0
             
-            # Show the Option Chain Table
-            st.dataframe(chain.calls[['strike', 'lastPrice', 'openInterest']].head(5), use_container_width=True)
+            # IV Radar
+            avg_iv = chain.calls['impliedVolatility'].mean() * 100
+            
+            # Strike Suggestion Logic
+            plan = get_strike_suggestion(current_price, pcr, avg_iv)
+            
+            # --- DASHBOARD RENDERING ---
+            m1, m2, m3, m4 = st.columns(4)
+            m1.metric("LTP", f"₹{current_price:,.2f}")
+            m2.metric("PCR (OI)", f"{pcr:.2f}")
+            m3.metric("Avg IV", f"{avg_iv:.1f}%")
+            m4.metric("Expiry", nearest_expiry)
+            
+            # TACTICAL GRID
+            st.subheader("🛠️ Tactical Strike Plan")
+            col_a, col_b = st.columns(2)
+            with col_a:
+                st.info(f"**Strategy:** {plan['Action']}")
+                st.success(f"**Target Call Strike:** {plan['Call Strike']}")
+            with col_b:
+                st.warning(f"**Target Put Strike:** {plan['Put Strike']}")
+                
+            # HEATMAP TABLE
+            st.subheader("🔥 Option Chain Pulse (Calls)")
+            st.dataframe(chain.calls[['strike', 'lastPrice', 'change', 'openInterest', 'impliedVolatility']].head(10), use_container_width=True)
+            
         else:
-            st.info("This ticker is not in the FnO segment. Running Equity-only analysis.")
+            st.error("No Option Data available for this ticker. Ensure it is an FnO-listed stock.")
+            
+    except Exception as e:
+        st.error(f"Mission Failed: {str(e)}")
+
+st.markdown("---")
+st.caption("Data source: Yahoo Finance India. Delays of 15 mins may apply during live market hours.")
