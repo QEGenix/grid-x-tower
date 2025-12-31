@@ -9,12 +9,15 @@ import datetime
 st.set_page_config(page_title="Grid-x 2.0: Agentic Tower", layout="wide")
 st_autorefresh(interval=120 * 1000, key="gridx_heartbeat")
 
-# --- 2. DATA SATELLITE (Cached) ---
+# --- 2. DATA SATELLITE (With Ticker Guard) ---
 @st.cache_data(ttl=120)
 def fetch_tower_data(ticker_sym):
     try:
         tickers = [ticker_sym, "^INDIAVIX"]
         data = yf.download(tickers, period="1d", interval="1m", progress=False, auto_adjust=True, multi_level_index=False)
+        # Check if the dataframe is empty or doesn't contain the requested ticker
+        if data.empty or ticker_sym not in data.columns.get_level_values(0) if isinstance(data.columns, pd.MultiIndex) else ticker_sym not in data.columns:
+            return None
         return data
     except:
         return None
@@ -27,29 +30,36 @@ def calculate_rsi(series, window=14):
     return (100 - (100 / (1 + rs))).fillna(50)
 
 # --- 3. UI RENDERER ---
+st.sidebar.title("🛡️ Safety Pilot")
+target_input = st.sidebar.text_input("Asset Symbol (e.g. TCS, RELIANCE, NIFTY)", "TCS").upper().strip()
+
+# Resolve mapping for Indian Indices
+mapping = {"NIFTY": "^NSEI", "BANKNIFTY": "^NSEBANK", "SENSEX": "^BSESN"}
+ticker_sym = mapping.get(target_input, f"{target_input}.NS")
+
 try:
-    st.sidebar.title("🛡️ Safety Pilot")
-    target_input = st.sidebar.text_input("Asset Symbol", "TCS").upper()
-    ticker_sym = {"NIFTY": "^NSEI", "BANKNIFTY": "^NSEBANK"}.get(target_input, f"{target_input}.NS")
-    
     all_data = fetch_tower_data(ticker_sym)
 
-    if all_data is not None and not all_data.empty:
+    # 🛑 Ticker Guard Logic
+    if all_data is None or all_data.empty or ticker_sym not in all_data.columns:
+        st.error(f"⚠️ Symbol '{target_input}' Not Traded or Invalid.")
+        st.info("Tip: For Indian stocks, just type the name (e.g., INFY). For US stocks, use the full ticker (e.g., AAPL).")
+    else:
+        # Extract Data
         closes = all_data['Close'][ticker_sym].dropna()
         volumes = all_data['Volume'][ticker_sym].dropna()
-        vix = float(all_data['Close']['^INDIAVIX'].dropna().iloc[-1])
+        vix_series = all_data['Close'].get('^INDIAVIX', pd.Series([15.0]))
+        vix = float(vix_series.dropna().iloc[-1]) if not vix_series.empty else 15.0
         
         curr_p = float(closes.iloc[-1])
         vwap = float((closes * volumes).sum() / volumes.sum())
         current_rsi = float(calculate_rsi(closes).iloc[-1])
         
         # --- PILLAR: SIGNAL QUALITY FILTERS ---
-        # We only Buy if price is significantly above VWAP (0.1% buffer)
         buffer = vwap * 0.001 
         is_bullish = curr_p > (vwap + buffer) and 45 < current_rsi < 65
         is_bearish = curr_p < (vwap - buffer) and 35 < current_rsi < 55
         
-        # Strike & Logic
         interval = 50 if "NSEI" in ticker_sym else (100 if "NSEBANK" in ticker_sym else 10)
         atm_strike = int(round(curr_p / interval) * interval)
 
@@ -58,21 +68,21 @@ try:
         # --- DYNAMIC SIGNAL BANNER ---
         if is_bullish:
             action, color, reason_list = f"🟢 BUY {atm_strike} CE", "green", [
-                f"Price (₹{curr_p:.2f}) is trending above the Institutional VWAP (₹{vwap:.2f}).",
-                f"RSI is at {current_rsi:.1f}, showing healthy momentum without being overbought.",
-                "Institutional Bias (PCR) is supportive of an upside move."
+                f"Price (₹{curr_p:.2f}) is trending above Institutional Fair Value (VWAP: ₹{vwap:.2f}).",
+                f"RSI is at {current_rsi:.1f}, confirming strength without overextension.",
+                "Institutional momentum suggests buyers are in control."
             ]
         elif is_bearish:
             action, color, reason_list = f"🔴 BUY {atm_strike} PE", "red", [
-                f"Price (₹{curr_p:.2f}) has broken below the Fair Value Floor (VWAP).",
-                f"RSI at {current_rsi:.1f} indicates bearish pressure is increasing.",
-                "Market volatility (VIX) and volume suggest further downside risk."
+                f"Price (₹{curr_p:.2f}) has slipped below the VWAP floor.",
+                f"RSI at {current_rsi:.1f} shows bearish pressure building.",
+                "Market sentiment favors the downside at this level."
             ]
         else:
             action, color, reason_list = "🟡 MONITORING / NO TRADE", "orange", [
-                "Price is too close to the VWAP (Inside the 'No-Trade' chop zone).",
-                f"RSI at {current_rsi:.1f} is neutral, suggesting a lack of clear direction.",
-                "The system is waiting for institutional volume to confirm the next move."
+                "Price is currently inside the 'Chop Zone' (too close to VWAP).",
+                f"RSI at {current_rsi:.1f} is neutral/weak.",
+                "Waiting for price to break away from Fair Value with volume."
             ]
 
         st.markdown(f"""<div style="background-color:{color}22; padding:20px; border-radius:12px; border:2px solid {color}; text-align:center;">
@@ -80,17 +90,16 @@ try:
 
         # --- THE REASONING BOX ---
         st.write("")
-        with st.container():
-            st.markdown(f"""
-            <div style="background-color:rgba(255,255,255,0.05); padding:15px; border-radius:10px; border-left: 5px solid {color};">
-                <h4 style="margin-top:0;">🧠 Agentic Reasoning (How I Predicted This)</h4>
-                <ul style="margin-bottom:0;">
-                    <li>{reason_list[0]}</li>
-                    <li>{reason_list[1]}</li>
-                    <li>{reason_list[2]}</li>
-                </ul>
-            </div>
-            """, unsafe_allow_html=True)
+        st.markdown(f"""
+        <div style="background-color:rgba(255,255,255,0.05); padding:15px; border-radius:10px; border-left: 5px solid {color};">
+            <h4 style="margin-top:0;">🧠 Agentic Reasoning (How I Predicted This)</h4>
+            <ul style="margin-bottom:0; font-size:1.1rem;">
+                <li>{reason_list[0]}</li>
+                <li>{reason_list[1]}</li>
+                <li>{reason_list[2]}</li>
+            </ul>
+        </div>
+        """, unsafe_allow_html=True)
 
         # --- METRIC ROW ---
         st.write("")
@@ -100,7 +109,8 @@ try:
         m3.metric("RSI (14m)", f"{current_rsi:.1f}")
         m4.metric("India VIX", f"{vix:.2f}")
 
-        st.line_chart(pd.DataFrame({'Price': closes, 'VWAP': vwap}))
-
 except Exception as e:
-    st.error(f"Tower Logic Error: {e}")
+    st.info("📡 Scanning Satellite Feed... Please check ticker symbol.")
+
+st.divider()
+st.caption(f"Sync: {datetime.datetime.now().strftime('%H:%M:%S')} | QE Genix Architecture")
