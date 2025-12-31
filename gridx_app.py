@@ -6,18 +6,18 @@ from streamlit_autorefresh import st_autorefresh
 import datetime
 
 # --- 1. CORE SYSTEM CONFIG ---
-st.set_page_config(page_title="Grid-x 2.0: Strategic Tower", layout="wide")
-st_autorefresh(interval=120 * 1000, key="gridx_heartbeat")
+st.set_page_config(page_title="Grid-x 2.0: Dual Tower", layout="wide")
+st_autorefresh(interval=60 * 1000, key="gridx_heartbeat")
 
 # --- 2. DATA SATELLITE ---
-@st.cache_data(ttl=120)
-def fetch_multi_horizon(ticker_sym):
+@st.cache_data(ttl=60)
+def fetch_tower_data(ticker_sym):
     try:
         d_intra = yf.download(ticker_sym, period="1d", interval="1m", progress=False, auto_adjust=True)
-        d_long = yf.download(ticker_sym, period="1y", interval="1d", progress=False, auto_adjust=True)
-        d_vix = yf.download("^INDIAVIX", period="1d", interval="5m", progress=False, auto_adjust=True)
-        return d_intra, d_long, d_vix
-    except:
+        d_long = yf.download(ticker_sym, period="2y", interval="1d", progress=False, auto_adjust=True)
+        vix_data = yf.download("^INDIAVIX", period="1d", interval="5m", progress=False, auto_adjust=True)
+        return d_intra, d_long, vix_data
+    except Exception as e:
         return None, None, None
 
 def calculate_rsi(series, window=14):
@@ -30,18 +30,18 @@ def calculate_rsi(series, window=14):
 
 # --- 3. UI RENDERER ---
 st.sidebar.title("🛡️ Safety Pilot")
-target_input = st.sidebar.text_input("Asset Symbol", "NIFTY").upper().strip()
+target_input = st.sidebar.text_input("Asset Symbol", "RELIANCE").upper().strip()
 
 mapping = {"NIFTY": "^NSEI", "BANKNIFTY": "^NSEBANK", "SENSEX": "^BSESN"}
 ticker_sym = mapping.get(target_input, f"{target_input}.NS")
 
 try:
-    d_intra, d_long, d_vix = fetch_multi_horizon(ticker_sym)
+    d_intra, d_long, d_vix = fetch_tower_data(ticker_sym)
 
-    if d_intra is None or d_intra.empty or len(d_intra) < 1:
-        st.warning(f"📡 Syncing with Satellite... Data for {target_input} pending.")
+    if d_intra is None or d_intra.empty or len(d_intra) < 2:
+        st.warning(f"📡 Syncing with {target_input} Satellite... Market data pending.")
     else:
-        # Data Extraction
+        # DATA EXTRACTION
         def get_clean(df, col):
             data = df[col].iloc[:, 0] if isinstance(df[col], pd.DataFrame) else df[col]
             return data.ffill().bfill()
@@ -50,73 +50,81 @@ try:
         c_long = get_clean(d_long, 'Close')
         curr_p = float(c_intra.iloc[-1])
         
-        # VWAP Calculation with Zero-Volume Guard
+        # VWAP & RSI
         cum_vol = v_intra.cumsum()
         cum_pvt = (c_intra * v_intra).cumsum()
         vwap = float(cum_pvt.iloc[-1] / cum_vol.iloc[-1]) if cum_vol.iloc[-1] != 0 else curr_p
-        
         rsi_intra = float(calculate_rsi(c_intra).iloc[-1])
-        vix = float(get_clean(d_vix, 'Close').iloc[-1]) if not d_vix.empty else 15.0
+        ma200 = float(c_long.rolling(200).mean().iloc[-1])
 
-        # --- HORIZON LOGIC ---
-        ma200 = c_long.rolling(200).mean().iloc[-1]
-        stock_bull = curr_p > ma200
-        
-        # Derivative Momentum (Buffer included to prevent "No Trade" sticky errors)
-        intra_bull = curr_p > (vwap * 1.0002) and rsi_intra > 52
-        intra_bear = curr_p < (vwap * 0.9998) and rsi_intra < 48
+        # VIX Extraction
+        vix = 15.0
+        if d_vix is not None and not d_vix.empty:
+            vix = float(get_clean(d_vix, 'Close').iloc[-1])
 
-        st.title(f"🛰️ Grid-x 2.0: {target_input} Tower")
+        st.title(f"🛰️ QE Genix: {target_input} Dual-Tower Dashboard")
+        st.write("")
 
-        # --- THE DISTINCTION SECTION (Syntax-Error Free) ---
-        col1, col2 = st.columns(2)
+        # --- THE DUAL PARTITION ---
+        left_col, right_col = st.columns(2)
 
-        with col1:
-            st.subheader("📦 STOCK & EQUITY")
-            s_label = "ACCUMULATE" if stock_bull else "HOLD / EXIT"
-            s_col = "green" if stock_bull else "red"
-            # Using HTML without f-string brackets to avoid SyntaxError
-            html_stock = f"""<div style="background-color:{s_col}22; padding:20px; border-radius:12px; border:2px solid {s_col};">
-                <h2 style="color:{s_col}; margin:0;">{s_label}</h2>
-                <p style="margin:5px 0 0 0;"><b>Wealth Cycle:</b> {'Structural Uptrend' if stock_bull else 'Structural Downtrend'}</p>
-            </div>"""
-            st.markdown(html_stock, unsafe_allow_html=True)
+        # --- LEFT SIDE: STOCKS ---
+        with left_col:
+            st.markdown("### 📦 EQUITY TERMINAL (Cash)")
+            s_status = "ACCUMULATE" if curr_p > ma200 else "DISTRIBUTION"
+            s_col = "#2ecc71" if curr_p > ma200 else "#e74c3c"
+            
+            st.markdown(f"""
+                <div style="border:2px solid {s_col}; padding:20px; border-radius:12px; background-color:{s_col}15;">
+                    <h2 style="color:{s_col}; margin:0;">{s_status}</h2>
+                    <p style="margin:10px 0 0 0;"><b>Structure:</b> 200-Day Trend Tracking</p>
+                </div>
+            """, unsafe_allow_html=True)
+            
+            st.write("")
+            with st.container():
+                st.info(f"**Wealth Brief:** Price is ₹{abs(curr_p - ma200):.2f} {'above' if curr_p > ma200 else 'below'} the 200DMA (₹{ma200:.2f}). This is a **{'Structural Uptrend' if curr_p > ma200 else 'Structural Downtrend'}**.")
+            
+            # Stock Metrics
+            sm1, sm2 = st.columns(2)
+            sm1.metric("Live Price", f"₹{curr_p:.2f}")
+            sm2.metric("Trendline (200D)", f"₹{ma200:.2f}")
 
-        with col2:
-            st.subheader("⚡ DERIVATIVES (Options)")
+        # --- RIGHT SIDE: OPTIONS ---
+        with right_col:
+            st.markdown("### ⚡ DERIVATIVE TERMINAL (Options)")
+            is_bull = curr_p > vwap and rsi_intra > 50
+            is_bear = curr_p < vwap and rsi_intra < 50
+            
+            o_col = "#2ecc71" if is_bull else ("#e74c3c" if is_bear else "#f39c12")
             step = 50 if "NSEI" in ticker_sym else (100 if "NSEBANK" in ticker_sym else 10)
             strike = int(round(curr_p / step) * step)
-            
-            if intra_bull:
-                o_label, o_col, o_brief = f"BUY {strike} CE", "green", "Bullish Momentum"
-            elif intra_bear:
-                o_label, o_col, o_brief = f"BUY {strike} PE", "red", "Bearish Distribution"
-            else:
-                o_label, o_col, o_brief = "NO TRADE", "orange", "Sideways / Chop"
+            o_action = f"BUY {strike} CE" if is_bull else (f"BUY {strike} PE" if is_bear else "NO TRADE")
 
-            html_opt = f"""<div style="background-color:{o_col}22; padding:20px; border-radius:12px; border:2px solid {o_col};">
-                <h2 style="color:{o_col}; margin:0;">{o_label}</h2>
-                <p style="margin:5px 0 0 0;"><b>Intraday:</b> {o_brief}</p>
-            </div>"""
-            st.markdown(html_opt, unsafe_allow_html=True)
-
-        # --- METRICS & REASONING ---
-        st.write("")
-        m1, m2, m3, m4 = st.columns(4)
-        m1.metric("Price", f"₹{curr_p:.2f}")
-        m2.metric("VWAP", f"₹{vwap:.2f}", f"{((curr_p-vwap)/vwap*100):.2f}%")
-        m3.metric("RSI", f"{rsi_intra:.1f}")
-        m4.metric("VIX", f"{vix:.2f}")
-
-        with st.expander("🧠 Agentic Intelligence Brief", expanded=True):
             st.markdown(f"""
-            * **Stock View:** This is a **{'Long-Term Asset' if stock_bull else 'High-Risk Asset'}** right now. The price is currently **{('above' if stock_bull else 'below')}** its 200-day average of ₹{ma200:.2f}.
-            * **Option View:** This is a **{'Leverage Opportunity' if (intra_bull or intra_bear) else 'Neutral Zone'}**. We are targeting the **{strike}** strike based on current spot volatility.
-            * **Logic Check:** PCR Sentiment and RSI ({rsi_intra:.1f}) suggest that {('buyers' if intra_bull else 'sellers' if intra_bear else 'no one')} is in control.
-            """)
+                <div style="border:2px solid {o_col}; padding:20px; border-radius:12px; background-color:{o_col}15;">
+                    <h2 style="color:{o_col}; margin:0;">{o_action}</h2>
+                    <p style="margin:10px 0 0 0;"><b>Structure:</b> Intraday Momentum Tracking</p>
+                </div>
+            """, unsafe_allow_html=True)
+
+            st.write("")
+            with st.container():
+                st.success(f"**Income Brief:** Intraday momentum is **{('Bullish' if is_bull else 'Bearish' if is_bear else 'Neutral')}**. RSI ({rsi_intra:.1f}) and VWAP (₹{vwap:.2f}) suggest {('entry' if (is_bull or is_bear) else 'waiting')} for better volume.")
+
+            # Option Metrics
+            om1, om2 = st.columns(2)
+            om1.metric("VWAP (Fair)", f"₹{vwap:.2f}", f"{((curr_p-vwap)/vwap*100):.2f}%")
+            om2.metric("RSI (1m)", f"{rsi_intra:.1f}")
+
+        # --- FOOTER METRICS (Market Condition) ---
+        st.divider()
+        f1, f2, f3 = st.columns(3)
+        f1.metric("Asset Class", "Index" if "^" in ticker_sym else "Equity")
+        f2.metric("India VIX", f"{vix:.2f}", delta="High Vol" if vix > 18 else "Stable", delta_color="inverse")
+        f3.metric("Last Heartbeat", datetime.datetime.now().strftime('%H:%M:%S'))
 
 except Exception as e:
-    st.error(f"Tower Logic Error: {e}")
+    st.error(f"Tower Analysis Error: {e}")
 
-st.divider()
-st.caption(f"Sync: {datetime.datetime.now().strftime('%H:%M:%S')} | QE Genix Master Architecture")
+st.caption("QE Genix Architecture | Data provided by Satellite Feed (yFinance)")
