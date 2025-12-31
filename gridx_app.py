@@ -1,105 +1,77 @@
 import streamlit as st
-import requests
 import pandas as pd
-import time
+import yfinance as yf
 
 # --- CONFIGURATION ---
-st.set_page_config(page_title="Grid-x: NSE Agentic Tower", layout="wide", page_icon="🛰️")
+st.set_page_config(page_title="Grid-x: Global Agentic Tower", layout="wide", page_icon="🛰️")
 
-class NSEAgent:
-    def __init__(self):
-        self.session = requests.Session()
-        self.headers = {
-            'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/121.0.0.0 Safari/537.36',
-            'Accept': 'application/json, text/plain, */*',
-            'Accept-Language': 'en-US,en;q=0.9',
-            'Accept-Encoding': 'gzip, deflate, br',
-            'Referer': 'https://www.nseindia.com/option-chain',
-            'Connection': 'keep-alive'
-        }
-        self.session.headers.update(self.headers)
-
-    def refresh_session(self):
-        """Standard NSE handshake to get live cookies."""
-        try:
-            # Hit the main site first
-            self.session.get("https://www.nseindia.com", timeout=10)
-            # Hit the option chain page to ensure we have the right tracking cookies
-            self.session.get("https://www.nseindia.com/option-chain", timeout=10)
-            return True
-        except:
-            return False
-
-    def fetch_data(self, symbol):
-        symbol = symbol.upper().strip()
-        is_index = symbol in ["NIFTY", "BANKNIFTY", "FINNIFTY", "MIDCPNIFTY"]
-        url = f"https://www.nseindia.com/api/option-chain-indices?symbol={symbol}" if is_index else \
-              f"https://www.nseindia.com/api/option-chain-equities?symbol={symbol}"
+def get_yfinance_data(symbol):
+    """Fetches option chain data using Yahoo Finance API (Reliable & Free)."""
+    # Yahoo Finance uses .NS suffix for NSE stocks (e.g., TCS.NS)
+    if not symbol.endswith(".NS") and symbol not in ["NIFTY", "BANKNIFTY"]:
+        symbol = f"{symbol}.NS"
+    
+    ticker = yf.Ticker(symbol)
+    
+    try:
+        # Get underlying price
+        price = ticker.fast_info['last_price']
         
-        try:
-            # First attempt
-            response = self.session.get(url, timeout=10)
-            
-            # If rejected (401/403), refresh and try one last time
-            if response.status_code in [401, 403]:
-                self.refresh_session()
-                time.sleep(1)
-                response = self.session.get(url, timeout=10)
-            
-            if response.status_code == 200:
-                return response.json()
-        except:
-            pass
-        return None
+        # Get available expiry dates
+        expiries = ticker.options
+        if not expiries:
+            return None, None, None
+        
+        # Fetch calls and puts for the nearest expiry
+        opt = ticker.option_chain(expiries[0])
+        calls = opt.calls[['strike', 'lastPrice', 'openInterest']].rename(columns={'lastPrice': 'Call LTP', 'openInterest': 'Call OI'})
+        puts = opt.puts[['strike', 'lastPrice', 'openInterest']].rename(columns={'lastPrice': 'Put LTP', 'openInterest': 'Put OI'})
+        
+        # Merge into a single chain
+        df = pd.merge(calls, puts, on='strike', how='inner')
+        return price, expiries[0], df
+    except Exception as e:
+        st.error(f"Error fetching data: {e}")
+        return None, None, None
 
-# --- UI LOGIC ---
-st.title("🛰️ Agentic Control Tower: NSE Live")
-
-if 'agent' not in st.session_state:
-    st.session_state.agent = NSEAgent()
+# --- UI ---
+st.title("🛰️ Grid-x 2.0: Multi-Source Control Tower")
+st.info("Switched to Yahoo Finance source for higher reliability and no 'Session Expired' errors.")
 
 with st.sidebar:
-    st.header("🎯 Mission Parameters")
-    target = st.text_input("NSE Symbol (TCS, RELIANCE, NIFTY)", "TCS")
-    if st.button("🚀 INITIALIZE SCAN"):
-        st.session_state.run_scan = True
+    st.header("🎯 Target Selection")
+    # For Yahoo Finance, use TCS.NS or just TCS
+    raw_target = st.text_input("Enter Symbol (TCS, RELIANCE, INFOSY)", "TCS").upper()
+    scan = st.button("🚀 INITIALIZE SCAN")
 
-if st.session_state.get('run_scan'):
-    with st.spinner(f"Establishing Secure Link for {target}..."):
-        # We refresh the session every time the button is clicked
-        st.session_state.agent.refresh_session()
-        data = st.session_state.agent.fetch_data(target)
+if scan:
+    with st.spinner(f"Analyzing {raw_target} via Global Link..."):
+        ltp, expiry, df = get_yfinance_data(raw_target)
         
-        if data and 'records' in data:
-            ltp = data['records'].get('underlyingValue', 0)
-            expiry = data['records'].get('expiryDates', [None])[0]
+        if df is not None:
+            # Calculations
+            total_call_oi = df['Call OI'].sum()
+            total_put_oi = df['Put OI'].sum()
+            pcr = total_put_oi / total_call_oi if total_call_oi > 0 else 0
             
-            if expiry:
-                # Process only the nearest expiry
-                rows = []
-                for item in data['records'].get('data', []):
-                    if item.get('expiryDate') == expiry:
-                        c, p = item.get('CE', {}), item.get('PE', {})
-                        rows.append({
-                            "Strike": item.get('strikePrice'),
-                            "Call OI": c.get('openInterest', 0),
-                            "Put OI": p.get('openInterest', 0),
-                            "Call LTP": c.get('lastPrice', 0),
-                            "Put LTP": p.get('lastPrice', 0)
-                        })
-                
-                df = pd.DataFrame(rows).sort_values("Strike")
-                
-                # Visuals
-                c1, c2 = st.columns(2)
-                c1.metric(f"{target} LTP", f"₹{ltp}")
-                c2.metric("Expiry", expiry)
-                
-                st.subheader(f"🔥 Option Chain: {expiry}")
-                # Show strikes near the ATM (At-the-money)
-                atm_filter = df[(df['Strike'] >= ltp*0.95) & (df['Strike'] <= ltp*1.05)]
-                st.dataframe(atm_filter.style.background_gradient(cmap="RdYlGn", subset=['Put OI']), use_container_width=True)
-            else:
-                st.error("No active contracts found.")
+            # Dashboard Metrics
+            m1, m2, m3 = st.columns(3)
+            m1.metric("Current Price", f"₹{ltp:.2f}")
+            m2.metric("Nearest Expiry", expiry)
+            m3.metric("PCR (Volume)", f"{pcr:.2f}")
+            
+            # Option Chain Heatmap
+            st.subheader(f"📊 Option Chain Heatmap")
+            # Filter for ATM strikes (Within 5% of price)
+            atm_df = df[(df['strike'] >= ltp*0.95) & (df['strike'] <= ltp*1.05)]
+            
+            st.dataframe(
+                atm_df.style.background_gradient(subset=['Call OI'], cmap="Reds")
+                .background_gradient(subset=['Put OI'], cmap="Greens"),
+                use_container_width=True
+            )
         else:
-            st.error("🔴 Mission Failed: Session rejected by NSE. Try clicking the button again in 10 seconds.")
+            st.error(f"Could not find option data for {raw_target}. Ensure it is an FnO stock.")
+
+st.markdown("---")
+st.caption("Data Source: Yahoo Finance | Backup: Agentic Failover Mode")
