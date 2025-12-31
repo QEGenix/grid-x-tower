@@ -3,110 +3,101 @@ import requests
 import pandas as pd
 import time
 
-# --- SESSION & HEADER CONFIGURATION ---
-# This mimics a real browser to prevent "401 Unauthorized" errors
-HEADERS = {
-    'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36',
-    'Accept-Language': 'en-US,en;q=0.9',
-    'Accept-Encoding': 'gzip, deflate, br',
-    'Accept': '*/*',
-    'Connection': 'keep-alive'
-}
-
-class NSEPortal:
+# --- ROBUST NSE SESSION MANAGER ---
+class NSEAgent:
     def __init__(self):
+        self.headers = {
+            'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/121.0.0.0 Safari/537.36',
+            'Accept-Language': 'en-US,en;q=0.9',
+            'Accept-Encoding': 'gzip, deflate, br',
+            'Connection': 'keep-alive'
+        }
         self.session = requests.Session()
-        self.session.headers.update(HEADERS)
-        self.base_url = "https://www.nseindia.com"
-        # Initial visit to get cookies
-        try:
-            self.session.get(self.base_url, timeout=10)
-        except:
-            st.error("❌ Could not connect to NSE. Please check your internet.")
+        self.session.headers.update(self.headers)
+        self.refresh_session()
 
-    def get_option_chain(self, symbol):
-        # Determine if it's an index or a stock scrip
+    def refresh_session(self):
+        """Visits the homepage to grab fresh cookies."""
+        try:
+            self.session.get("https://www.nseindia.com", timeout=10)
+        except Exception as e:
+            st.error(f"Failed to reach NSE: {e}")
+
+    def fetch_option_chain(self, symbol):
+        symbol = symbol.upper().strip()
         indices = ["NIFTY", "BANKNIFTY", "FINNIFTY", "MIDCPNIFTY"]
-        if symbol.upper() in indices:
-            url = f"{self.base_url}/api/option-chain-indices?symbol={symbol.upper()}"
+        
+        # Determine the correct API endpoint
+        if symbol in indices:
+            url = f"https://www.nseindia.com/api/option-chain-indices?symbol={symbol}"
         else:
-            url = f"{self.base_url}/api/option-chain-equities?symbol={symbol.upper()}"
+            url = f"https://www.nseindia.com/api/option-chain-equities?symbol={symbol}"
         
         try:
             response = self.session.get(url, timeout=10)
+            # If session expired (401), refresh once and retry
+            if response.status_code == 401:
+                self.refresh_session()
+                response = self.session.get(url, timeout=10)
+                
             if response.status_code == 200:
                 return response.json()
             else:
+                st.warning(f"NSE returned status code {response.status_code}. The symbol '{symbol}' might not be in FnO.")
                 return None
-        except:
+        except Exception as e:
+            st.error(f"Data fetch error: {e}")
             return None
 
 # --- UI ARCHITECTURE ---
-st.set_page_config(page_title="Grid-x NSE Tower", layout="wide")
-st.title("🇮🇳 Agentic Control Tower: NSE Direct")
+st.set_page_config(page_title="NSE Agentic Tower", layout="wide")
+st.title("🛰️ Agentic Control Tower: NSE Live")
 
-# Initialize NSE Session
-if 'nse' not in st.session_state:
-    st.session_state.nse = NSEPortal()
+if 'agent' not in st.session_state:
+    st.session_state.agent = NSEAgent()
 
 with st.sidebar:
-    st.header("🎯 Mission Parameters")
-    target = st.text_input("Enter NSE Symbol (NIFTY / RELIANCE / TCS)", "NIFTY")
+    st.header("🎯 Target Selection")
+    target = st.text_input("NSE Symbol (e.g. TCS, RELIANCE, NIFTY)", "TCS")
     if st.button("🚀 INITIALIZE SCAN"):
-        st.session_state.run_scan = True
-    else:
-        st.session_state.run_scan = False
+        st.session_state.scan_active = True
 
-if st.session_state.get('run_scan'):
-    with st.spinner(f"Establishing Secure Link to NSE for {target}..."):
-        data = st.session_state.nse.get_option_chain(target)
+if st.session_state.get('scan_active'):
+    with st.spinner(f"Establishing Link for {target}..."):
+        data = st.session_state.agent.fetch_option_chain(target)
         
         if data:
-            # 1. Perception: Basic Info
             ltp = data['records']['underlyingValue']
-            expiry = data['records']['expiryDates'][0] # Nearest Expiry
+            expiry = data['records']['expiryDates'][0]
             
-            m1, m2, m3 = st.columns(3)
-            m1.metric("Underlying Price", f"₹{ltp:,.2f}")
-            m2.metric("Expiry Tracked", expiry)
-            m3.metric("Status", "🟢 LIVE")
-
-            # 2. Logic: Process Option Chain
-            raw_rows = data['records']['data']
-            processed_data = []
-            for item in raw_rows:
+            # --- DASHBOARD ---
+            c1, c2 = st.columns(2)
+            c1.metric(f"{target} Price", f"₹{ltp:,.2f}")
+            c2.metric("Target Expiry", expiry)
+            
+            # Process Data
+            rows = []
+            for item in data['records']['data']:
                 if item['expiryDate'] == expiry:
-                    strike = item['strikePrice']
-                    ce_oi = item.get('CE', {}).get('openInterest', 0)
-                    pe_oi = item.get('PE', {}).get('openInterest', 0)
-                    
-                    processed_data.append({
-                        "Strike": strike,
-                        "Call OI": ce_oi,
-                        "Put OI": pe_oi,
-                        "LTP (Call)": item.get('CE', {}).get('lastPrice', 0),
-                        "LTP (Put)": item.get('PE', {}).get('lastPrice', 0)
+                    rows.append({
+                        "Strike": item['strikePrice'],
+                        "Call OI": item.get('CE', {}).get('openInterest', 0),
+                        "Put OI": item.get('PE', {}).get('openInterest', 0),
+                        "IV": item.get('CE', {}).get('impliedVolatility', 0)
                     })
-
-            df = pd.DataFrame(processed_data).sort_values("Strike")
             
-            # 3. Strategy: Call/Put Wall Detection
-            st.subheader("🛠️ Tactical Strike Radar")
-            # Filter for strikes near the current price
-            buffer = 200 if "NIFTY" in target else 50
-            near_atm = df[(df['Strike'] >= ltp - buffer) & (df['Strike'] <= ltp + buffer)]
+            df = pd.DataFrame(rows).sort_values("Strike")
             
-            st.table(near_atm)
+            # Filter for ATM Strikes (Price +/- 5%)
+            buffer = ltp * 0.05
+            atm_view = df[(df['Strike'] >= ltp - buffer) & (df['Strike'] <= ltp + buffer)]
             
-            # 4. Agentic Suggestion
-            total_call_oi = df['Call OI'].sum()
-            total_put_oi = df['Put OI'].sum()
-            pcr = total_put_oi / total_call_oi if total_call_oi > 0 else 0
+            st.subheader("🔥 Option Chain Heatmap")
+            st.dataframe(atm_view, use_container_width=True)
             
-            st.info(f"**Agentic Sentiment:** PCR is **{pcr:.2f}**. " + 
-                    ("Bullish momentum detected." if pcr > 1 else "Market showing resistance."))
+            # Agentic Logic
+            pcr = df['Put OI'].sum() / df['Call OI'].sum() if df['Call OI'].sum() > 0 else 0
+            st.info(f"**Agentic Insight:** PCR is **{pcr:.2f}**. " + 
+                    ("Support is building." if pcr > 1.1 else "Resistance is strong."))
         else:
-            st.error(f"🔴 NSE Error: '{target}' may not be in the FnO segment or session expired.")
-
-st.divider()
-st.caption("Data provided via secure session handshake with nseindia.com. Use for educational purposes.")
+            st.error(f"Mission Failed. Verify '{target}' is an FnO stock (like TCS, INFY, RELIANCE).")
