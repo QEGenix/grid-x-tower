@@ -32,94 +32,99 @@ def calculate_rsi(series, window=14):
 
 # --- 3. UI RENDERER ---
 st.sidebar.title("🛡️ Safety Pilot")
-target_input = st.sidebar.text_input("Asset Symbol", "RELIANCE").upper().strip()
+target_input = st.sidebar.text_input("Asset Symbol", "NIFTY").upper().strip()
 
+# Explicit mapping to differentiate Index vs Stock
+IS_INDEX = target_input in ["NIFTY", "BANKNIFTY", "SENSEX"]
 mapping = {"NIFTY": "^NSEI", "BANKNIFTY": "^NSEBANK", "SENSEX": "^BSESN"}
 ticker_sym = mapping.get(target_input, f"{target_input}.NS")
 
 try:
     d_intra, d_short, d_long, d_vix = fetch_multi_horizon(ticker_sym)
 
-    if d_intra is None or d_intra.empty:
-        st.error(f"⚠️ Symbol '{target_input}' not found. Please use standard NSE/BSE tickers.")
+    if d_intra is None or d_intra.empty or len(d_intra) < 2:
+        st.error(f"⚠️ No live data for '{target_input}'. Check if market is open.")
     else:
-        # Helper to get clean series
-        def get_c(df): return df['Close'].iloc[:, 0] if isinstance(df['Close'], pd.DataFrame) else df['Close']
-        def get_v(df): return df['Volume'].iloc[:, 0] if isinstance(df['Volume'], pd.DataFrame) else df['Volume']
+        # --- DATA CLEANING (VWAP NaN FIX) ---
+        def get_clean(df, col):
+            data = df[col].iloc[:, 0] if isinstance(df[col], pd.DataFrame) else df[col]
+            return data.ffill().bfill() # Forward fill and backfill any NaNs
 
-        c_intra, v_intra = get_c(d_intra), get_v(d_intra)
-        c_short, c_long = get_c(d_short), get_c(d_long)
+        c_intra, v_intra = get_clean(d_intra, 'Close'), get_clean(d_intra, 'Volume')
+        c_short, c_long = get_clean(d_short, 'Close'), get_clean(d_long, 'Close')
         
         curr_p = float(c_intra.iloc[-1])
-        vwap = float((c_intra * v_intra).sum() / v_intra.sum())
+        
+        # Robust VWAP calculation
+        pvt = c_intra * v_intra
+        cumulative_pvt = pvt.cumsum()
+        cumulative_vol = v_intra.cumsum()
+        # Handle zero volume to avoid NaN
+        vwap_series = cumulative_pvt / cumulative_vol.replace(0, 1)
+        vwap = float(vwap_series.iloc[-1])
+        
         rsi_intra = float(calculate_rsi(c_intra).iloc[-1])
-        rsi_short = float(calculate_rsi(c_short).iloc[-1])
         rsi_long = float(calculate_rsi(c_long).iloc[-1])
-        vix = float(get_c(d_vix).iloc[-1]) if not d_vix.empty else 15.0
+        vix = float(get_clean(d_vix, 'Close').iloc[-1]) if not d_vix.empty else 15.0
+        pcr_val = round(1.0 + (0.05 if rsi_long > 50 else -0.05), 2) # Simulated Sentiment
 
-        # --- PCR SIMULATION (Sentiment Proxy) ---
-        # PCR > 1 (Bullish Sentiment), PCR < 1 (Bearish Sentiment)
-        pcr_val = round(1.0 + (0.1 if rsi_long > 55 else -0.1) + np.random.uniform(-0.05, 0.05), 2)
+        # --- SIGNAL CALCULATOR ---
+        intra_bull = curr_p > vwap and rsi_intra > 50
+        intra_bear = curr_p < vwap and rsi_intra < 50
+        long_bull = curr_p > c_long.rolling(200).mean().iloc[-1]
 
-        # --- HORIZON STATUS CALCULATOR ---
-        def horizon_check(price, ref, rsi):
-            if price > ref and rsi > 50: return "Bullish", "green"
-            if price < ref and rsi < 50: return "Bearish", "red"
-            return "Neutral", "gray"
+        st.title(f"🛰️ Grid-x 2.0: {target_input} Tower")
 
-        s_intra, c_intra_ui = horizon_check(curr_p, vwap, rsi_intra)
-        s_short, c_short_ui = horizon_check(curr_p, c_short.rolling(50).mean().iloc[-1], rsi_short)
-        s_long, c_long_ui = horizon_check(curr_p, c_long.rolling(200).mean().iloc[-1], rsi_long)
+        # --- THE DISTINCTION SECTION ---
+        col1, col2 = st.columns(2)
 
-        # --- UI LAYOUT ---
-        st.title(f"🛰️ QE Genix: {target_input} Tower")
+        with col1:
+            st.subheader("📦 STOCK & EQUITY (Delivery)")
+            status = "ACCUMULATE" if long_bull else "HOLD / EXIT"
+            s_col = "green" if long_bull else "red"
+            st.markdown(f"""<div style="background-color:{s_col}22; padding:20px; border-radius:10px; border:2px solid {s_col};">
+                <h2 style="color:{s_col}; margin:0;">{status}</h2>
+                <p style="margin:5px 0 0 0;"><b>Horizon:</b> 3+ Months</p>
+                <p style="font-size:0.8em;">Based on structural price-line vs 200DMA.</p>
+            </div>""", unsafe_allow_html=True)
 
-        # 1. OPTION VS STOCK DISTINCTION PANELS
-        col_stock, col_option = st.columns(2)
+        with col2:
+            st.subheader("⚡ DERIVATIVES (Options)")
+            # Smart strike calculation
+            step = 50 if "NSEI" in ticker_sym else (100 if "NSEBANK" in ticker_sym else 10)
+            strike = int(round(curr_p / step) * step)
+            
+            if intra_bull:
+                o_label, o_col = f"BUY {strike} CE", "green"
+            elif intra_bear:
+                o_label, o_col = f"BUY {strike} PE", "red"
+            else:
+                o_label, o_col = "NO TRADE", "orange"
 
-        with col_stock:
-            st.subheader("📦 Stock (Equity) Signal")
-            s_action = "ACCUMULATE" if s_long == "Bullish" else "EXIT/AVOID"
-            s_color = "green" if s_long == "Bullish" else "red"
-            st.markdown(f"""<div style="background-color:{s_color}22; padding:15px; border-radius:10px; border:1px solid {s_color}; text-align:center;">
-                <h2 style="color:{s_color}; margin:0;">{s_action}</h2>
-                <small style="color:white;">Best for: Long-Term Wealth</small></div>""", unsafe_allow_html=True)
+            st.markdown(f"""<div style="background-color:{o_col}22; padding:20px; border-radius:10px; border:2px solid {o_col};">
+                <h2 style="color:{o_col}; margin:0;">{o_label}</h2>
+                <p style="margin:5px 0 0 0;"><b>Horizon:</b> Intraday / Weekly</p>
+                <p style="font-size:0.8em;">Based on VWAP Momentum & RSI Acceleration.</p>
+            </div>""", unsafe_allow_html=True)
 
-        with col_option:
-            st.subheader("⚡ Option (Derivative) Signal")
-            interval = 50 if "NSEI" in ticker_sym else (100 if "NSEBANK" in ticker_sym else 10)
-            strike = int(round(curr_p / interval) * interval)
-            o_action = f"BUY {strike} CE" if s_intra == "Bullish" else (f"BUY {strike} PE" if s_intra == "Bearish" else "NO TRADE")
-            o_color = "green" if s_intra == "Bullish" else ("red" if s_intra == "Bearish" else "orange")
-            st.markdown(f"""<div style="background-color:{o_color}22; padding:15px; border-radius:10px; border:1px solid {o_color}; text-align:center;">
-                <h2 style="color:{o_color}; margin:0;">{o_action}</h2>
-                <small style="color:white;">Best for: Intraday Leverage</small></div>""", unsafe_allow_html=True)
-
-        # 2. THE MULTI-HORIZON & PCR PANEL
+        # --- METRICS & BRIEF ---
         st.write("")
-        m1, m2, m3, m4, m5 = st.columns(5)
+        m1, m2, m3, m4 = st.columns(4)
         m1.metric("Live Price", f"₹{curr_p:.2f}")
-        m2.metric("PCR (Bias)", f"{pcr_val}", "Strong" if pcr_val > 1 else "Weak")
-        m3.metric("RSI (Intra)", f"{rsi_intra:.1f}")
-        m4.metric("India VIX", f"{vix:.2f}")
-        m5.metric("VWAP", f"₹{vwap:.2f}")
+        m2.metric("VWAP (Intra)", f"₹{vwap:.2f}", f"{((curr_p-vwap)/vwap*100):.2f}%")
+        m3.metric("PCR Sentiment", f"{pcr_val}")
+        m4.metric("Market Vol (VIX)", f"{vix:.2f}")
 
-        # 3. STRATEGIC REASONING
-        st.write("")
         with st.expander("🧠 Agentic Intelligence Brief", expanded=True):
+            asset_type = "INDEX" if IS_INDEX else "INDIVIDUAL STOCK"
             st.markdown(f"""
-            ### **Horizon Alignment**
-            * **Intraday (1m):** <span style="color:{c_intra_ui}">{s_intra}</span> — {('Momentum is scaling above VWAP.' if s_intra=='Bullish' else 'Price is decaying below VWAP.')}
-            * **Short-Term (1h):** <span style="color:{c_short_ui}">{s_short}</span> — {('Hold for 2-4 weeks.' if s_short=='Bullish' else 'Wait for trend reversal.')}
-            * **Long-Term (1d):** <span style="color:{c_long_ui}">{s_long}</span> — {('Structural Bull Market.' if s_long=='Bullish' else 'Structural Bear Market.')}
-
-            ### **The Distinction**
-            * **Why Stock?** Since the Long-Term trend is **{s_long}**, physical delivery of shares is **{('recommended' if s_long=='Bullish' else 'risky')}**. You own the asset indefinitely.
-            * **Why Option?** Intraday momentum is **{s_intra}**. Options decay (Theta) means you must exit by end of day. Use the **{strike} Strike** for maximum liquidity.
-            """, unsafe_allow_html=True)
+            * **Identity:** Analyzing {target_input} as an **{asset_type}**.
+            * **Logic:** For **Stocks**, we prioritize capital safety. For **Options**, we prioritize "Delta" and "Theta" by following the {('Bullish' if intra_bull else 'Bearish' if intra_bear else 'Neutral')} intraday trend.
+            * **Alert:** {('Price is trending with volume support.' if curr_p > vwap else 'Price is decaying. Avoid long positions.')}
+            """)
 
 except Exception as e:
-    st.error(f"Satellite Data Error: {e}")
+    st.error(f"Satellite sync failed. Possible reasons: Market closed or invalid symbol. Error: {e}")
 
 st.divider()
 st.caption(f"Sync: {datetime.datetime.now().strftime('%H:%M:%S')} | QE Genix Master Architecture")
