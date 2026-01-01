@@ -1,99 +1,86 @@
 import streamlit as st
 import pandas as pd
-import yfinance as yf
 import pandas_ta as ta
+import yfinance as yf
+from datetime import datetime
 from streamlit_autorefresh import st_autorefresh
 
-# --- 1. CONFIG & SETTINGS ---
-st.set_page_config(page_title="QE Genix: Capital Guardian", layout="wide")
-st_autorefresh(interval=45 * 1000, key="sniper_heartbeat")
+# --- 1. OLED BLACK THEME & CONFIG ---
+st.set_page_config(page_title="QE Genix: Sensex Specialist", layout="wide")
+st.markdown("<style>body {background-color: #000000; color: #00FF41;}</style>", unsafe_allow_html=True)
+st_autorefresh(interval=60 * 1000, key="cockpit_heartbeat")
 
-SENSEX_TICKER = "^BSESN"
-PREV_CLOSE = 85220.60  # Fixed for Jan 1, 2026
-LOT_SIZE = 10          # Sensex Lot Size
+# CONSTANTS
+CAPITAL = 20000
+MAX_DAILY_LOSS = 2000
+LOT_SIZE = 10
 
-# --- 2. THE HYBRID SATELLITE ---
-@st.cache_data(ttl=30)
-def fetch_market_state():
+# --- 2. DATA SATELLITE (Refined for Jan 1, 2026) ---
+def get_cockpit_data():
     try:
-        df = yf.download(SENSEX_TICKER, period="2d", interval="5m", progress=False)
-        if df.empty: return None, "Rate Limited"
+        df = yf.download("^BSESN", period="2d", interval="5m", progress=False)
+        vix = yf.download("^INDIAVIX", period="1d", progress=False)
         if isinstance(df.columns, pd.MultiIndex): df.columns = [col[0] for col in df.columns]
-        return df, "Live"
-    except:
-        return None, "Offline"
+        return df, float(vix['Close'].iloc[-1]) if not vix.empty else 12.0
+    except: return None, 12.0
 
-# --- 3. UI: TOP BAR ---
-st.title("🛰️ QE Genix: Sensex Capital Guardian")
-data, status = fetch_market_state()
+# --- 3. THE PROBABILITY ENGINE ---
+def calculate_probability(df, vix):
+    close = df['Close']
+    zlma = ta.zlma(close, length=20)
+    rsi = ta.rsi(close, length=14).iloc[-1]
+    
+    score = 0
+    # Pillar 1: Trend Confirmation (2 Consecutive candles)
+    if (close.iloc[-1] > zlma.iloc[-1]) and (close.iloc[-2] > zlma.iloc[-2]): score += 40
+    elif (close.iloc[-1] < zlma.iloc[-1]) and (close.iloc[-2] < zlma.iloc[-2]): score += 40
+    
+    # Pillar 2: Momentum (RSI)
+    if rsi > 60 or rsi < 40: score += 30
+    
+    # Pillar 3: Volatility (VIX Cooling/Stable)
+    if vix < 18: score += 30
+    
+    return score, rsi, zlma.iloc[-1]
 
-with st.sidebar:
-    st.header("🛠️ Tactical Override")
-    manual_mode = st.toggle("Enable Manual Bridge", value=(status != "Live"))
-    if manual_mode:
-        m_price = st.number_input("Broker Price (Spot):", value=85193.0)
-        m_trend = st.selectbox("Current Trend:", ["Bullish Momentum", "Bearish Pressure", "Chop"])
+# --- 4. THE COCKPIT UI ---
+st.title("🛰️ QE Genix: Sensex Specialist")
+df, vix_val = get_cockpit_data()
 
-# --- 4. ENGINE LOGIC ---
-if not manual_mode and data is not None:
-    curr_p = float(data['Close'].iloc[-1])
-    label = "📡 SATELLITE SYNC"
-    # Trend Logic
-    zlma = ta.zlma(data['Close'], length=20).iloc[-1]
-    is_up = (curr_p > zlma)
-    is_down = (curr_p < zlma)
-else:
-    curr_p = m_price if manual_mode else 85193.0
-    label = "🕹️ MANUAL BRIDGE"
-    is_up = (m_trend == "Bullish Momentum")
-    is_down = (m_trend == "Bearish Pressure")
-
-# --- 5. DASHBOARD ---
-st.divider()
-color = "#2ecc71" if is_up else ("#e74c3c" if is_down else "#fbc531")
-change = curr_p - PREV_CLOSE
-
-col_main, col_metrics = st.columns([2, 1])
-
-with col_main:
+if df is not None:
+    prob, rsi_val, trend_line = calculate_probability(df, vix_val)
+    curr_p = float(df['Close'].iloc[-1])
+    
+    # TOP BAR: PROBABILITY DIAL
+    dial_color = "#00FF41" if prob >= 75 else "#555555" # Neon Green vs Gray
     st.markdown(f"""
-        <div style="background-color:{color}22; border:4px solid {color}; padding:30px; border-radius:15px; text-align:center;">
-            <p style="color:{color}; font-weight:bold;">{label}</p>
-            <h1 style="color:white; font-size:45px;">{'BUY CALL (CE)' if is_up else 'BUY PUT (PE)' if is_down else 'WAIT'}</h1>
-            <p style="color:#aaa;">Targeting ATM Strike: {int(round(curr_p/100)*100)}</p>
+        <div style="border: 2px solid {dial_color}; padding: 20px; border-radius: 50px; text-align: center;">
+            <h2 style="color: {dial_color};">CONFLUENCE PROBABILITY: {prob}%</h2>
         </div>
     """, unsafe_allow_html=True)
 
-with col_metrics:
-    st.metric("Sensex Spot", f"{curr_p:,.2f}", f"{change:,.2f} ({change/PREV_CLOSE:.2%})")
-    st.metric("Prev. Close", f"{PREV_CLOSE:,.2f}")
+    # CENTER STAGE: ACTION TERMINAL
+    st.divider()
+    if prob >= 75:
+        side = "CALL (CE)" if curr_p > trend_line else "PUT (PE)"
+        # VASL (Volatility Adjusted Stop Loss)
+        vasl_points = round(vix_val * 4) # Logic: Higher VIX = Wider SL
+        
+        st.markdown(f"""
+            <div style="background-color: #00FF4122; border: 5px solid #00FF41; padding: 40px; border-radius: 20px;">
+                <h1 style="color: #00FF41; text-align: center;">🚀 SIGNAL: BUY {side}</h1>
+                <h3 style="color: white; text-align: center;">SENSEX {int(round(curr_p/100)*100)} ATM</h3>
+                <p style="text-align: center;">SL: {vasl_points} Pts | TGT: {vasl_points * 2} Pts</p>
+            </div>
+        """, unsafe_allow_html=True)
+    else:
+        st.markdown("""
+            <div style="background-color: #222222; border: 5px solid #555555; padding: 40px; border-radius: 20px; text-align: center;">
+                <h1 style="color: #555555;">🛡️ SYSTEM: SEARCHING...</h1>
+                <p>Waiting for 75% Probability Confluence</p>
+            </div>
+        """, unsafe_allow_html=True)
 
-# --- 6. TACTICAL LADDER & PREMIUMS ---
-st.subheader("🎯 Strike Ladder & Risk Calculator (Budget: ₹20,000)")
-atm = int(round(curr_p / 100) * 100)
-
-# Estimate Premiums (Simplified based on distance from spot)
-def est_premium(strike, spot, is_ce):
-    intrinsic = max(0, spot - strike) if is_ce else max(0, strike - spot)
-    extrinsic = 180 # Average time value for Jan 1 expiry
-    return int(intrinsic + extrinsic)
-
-ladder = []
-for offset in [-200, 0, 200]:
-    strike = atm + offset
-    ce_p = est_premium(strike, curr_p, True)
-    pe_p = est_premium(strike, curr_p, False)
-    
-    # Capital Check: Can we afford 1 lot (Premium * Lot Size)?
-    can_afford_ce = "✅" if (ce_p * LOT_SIZE) <= 20000 else "❌"
-    can_afford_pe = "✅" if (pe_p * LOT_SIZE) <= 20000 else "❌"
-    
-    ladder.append({
-        "Strike": strike,
-        "CE Premium (Est)": f"₹{ce_p}",
-        "CE Affordable": can_afford_ce,
-        "PE Premium (Est)": f"₹{pe_p}",
-        "PE Affordable": can_afford_pe
-    })
-
-st.table(pd.DataFrame(ladder))
+    # BOTTOM GRID: LIVE VITALS
+    st.divider()
+    v1, v2, v3 =
