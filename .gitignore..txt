@@ -1,4 +1,18 @@
-.streamlit/
+# Python bytecode
 __pycache__/
-*.pyc
-.env
+*.py[cod]
+*$py.class
+
+# Environments
+.venv/
+venv/
+ENV/
+
+# Streamlit logs and secrets
+.streamlit/
+! .streamlit/config.toml
+
+# Data and Cache
+.pytest_cache/
+.mypy_cache/
+.ipynb_checkpoints/
