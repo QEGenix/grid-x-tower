@@ -2,80 +2,81 @@ import streamlit as st
 import pandas as pd
 import yfinance as yf
 import pandas_ta as ta
-import requests
+import time
+import random
 from streamlit_autorefresh import st_autorefresh
 
 # --- 1. CONFIG ---
-st.set_page_config(page_title="QE Genix: Apex Sniper", layout="wide")
-st_autorefresh(interval=30 * 1000, key="sniper_heartbeat")
+st.set_page_config(page_title="QE Genix: Stealth Sniper", layout="wide")
+# Slowing down the heartbeat to 90 seconds to avoid being banned again
+st_autorefresh(interval=90 * 1000, key="sniper_heartbeat")
 
 SENSEX_TICKER = "^BSESN"
 
-# --- 2. APEX DATA SATELLITE ---
-def fetch_apex_data():
+# --- 2. STEALTH DATA SATELLITE ---
+def fetch_stealth_data():
+    # List of various browsers to rotate identity
+    agents = [
+        'Mozilla/5.0 (Windows NT 10.0; Win64; x64) Chrome/119.0.0.0 Safari/537.36',
+        'Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/118.0.0.0 Safari/537.36',
+        'Mozilla/5.0 (X11; Linux x86_64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/119.0.0.0 Safari/537.36'
+    ]
+    
     try:
-        # Standard 2026 User-Agent
-        headers = {'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) Chrome/120.0.0.0 Safari/537.36'}
-        session = requests.Session()
-        session.headers.update(headers)
+        # Create a new session for every fetch to clear cookies
+        session = yf.utils.get_tld_auth_handler().get_session()
+        session.headers.update({'User-Agent': random.choice(agents)})
         
-        # We fetch 2 days to ensure indicator continuity
-        df = yf.download(SENSEX_TICKER, period="2d", interval="5m", progress=False, session=session)
+        # Adding a small random sleep to mimic human behavior
+        time.sleep(random.uniform(1, 3))
+        
+        df = yf.download(SENSEX_TICKER, period="5d", interval="5m", progress=False, session=session)
         
         if df.empty: return None
-        
-        # CRITICAL FIX: Flatten Multi-Index columns (the '2026 ghost' error)
         if isinstance(df.columns, pd.MultiIndex):
             df.columns = [col[0] for col in df.columns]
-            
         return df
-    except Exception as e:
+    except Exception:
         return None
 
 # --- 3. UI: COMMAND CENTER ---
-st.title("🛰️ QE Genix: Apex Prediction Engine")
-st.caption("v4.4 - Multi-Index Hardened | Jan 1, 2026 Live Status")
+st.title("🛰️ QE Genix: Stealth Sniper v4.5")
+st.caption("Status: Rate-Limit Avoidance Active | Interval: 90s")
 
-data = fetch_apex_data()
+data = fetch_stealth_data()
 
 if data is not None:
-    # DATA PROCESSING
     close = data['Close']
     curr_p = float(close.iloc[-1])
     
-    # INDICATORS (Zero-Lag + RSI)
+    # STICKY LOGIC (The "Decision Lock")
     zlma = ta.zlma(close, length=20)
     rsi = ta.rsi(close, length=14).iloc[-1]
     
-    # TREND CONFIRMATION (Sticky Logic)
-    # Must be above trend for 2 candles (10 mins) to prevent flipping
-    is_up = (close.iloc[-1] > zlma.iloc[-1]) and (close.iloc[-2] > zlma.iloc[-2]) and (rsi > 52)
-    is_down = (close.iloc[-1] < zlma.iloc[-1]) and (close.iloc[-2] < zlma.iloc[-2]) and (rsi < 48)
+    # Must hold for 2 candles (10 mins) + RSI Confirmation
+    is_up = (close.iloc[-1] > zlma.iloc[-1]) and (close.iloc[-2] > zlma.iloc[-2]) and (rsi > 55)
+    is_down = (close.iloc[-1] < zlma.iloc[-1]) and (close.iloc[-2] < zlma.iloc[-2]) and (rsi < 45)
 
-    # ACTION BOX
     st.divider()
     if is_up:
-        sig, color, side = "STRONG BUY", "#2ecc71", "CALL (CE)"
+        sig, color = "STRONG BUY (CE)", "#2ecc71"
     elif is_down:
-        sig, color, side = "STRONG SELL", "#e74c3c", "PUT (PE)"
+        sig, color = "STRONG SELL (PE)", "#e74c3c"
     else:
-        sig, color, side = "NEUTRAL / HOLD", "#fbc531", "CASH"
+        sig, color = "NEUTRAL (WAIT)", "#fbc531"
 
     st.markdown(f"""
         <div style="background-color:{color}22; border:5px solid {color}; padding:40px; border-radius:15px; text-align:center;">
-            <p style="color:{color}; font-weight:bold; letter-spacing:2px;">DIRECTIONAL BIAS</p>
-            <h1 style="color:white; font-size:55px; margin:10px 0;">{sig}: {side}</h1>
-            <p style="color:#aaa;">Confirmed on 5m Trend-Lock Protocol</p>
+            <h1 style="color:white; font-size:50px;">{sig}</h1>
+            <p style="color:#aaa;">Target: SENSEX {int(round(curr_p/100)*100)} Strike</p>
         </div>
     """, unsafe_allow_html=True)
 
-    # TRADE TICKET
-    atm = int(round(curr_p / 100) * 100)
-    col1, col2, col3 = st.columns(3)
+    # VITALS
+    col1, col2 = st.columns(2)
     col1.metric("Sensex Spot", f"{curr_p:,.2f}")
-    col2.metric("Target Strike", f"{atm}")
-    col3.metric("RSI Momentum", f"{rsi:.1f}")
-    
+    col2.metric("RSI Momentum", f"{rsi:.1f}")
+
 else:
-    st.error("📡 Satellite Link Interrupted.")
-    st.info("Yahoo Finance is blocking the session. Trying to bypass...")
+    st.error("🛑 SATELLITE BLOCKED: Yahoo Finance is still rate-limiting your IP.")
+    st.info("Wait 5-10 minutes without refreshing. The engine will auto-reconnect once the block expires.")
