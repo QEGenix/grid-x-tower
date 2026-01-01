@@ -8,11 +8,6 @@ __pycache__/
 venv/
 ENV/
 
-# Streamlit logs and secrets
+# Streamlit logs
 .streamlit/
 ! .streamlit/config.toml
-
-# Data and Cache
-.pytest_cache/
-.mypy_cache/
-.ipynb_checkpoints/
