@@ -5,86 +5,77 @@ import pandas_ta as ta
 import requests
 from streamlit_autorefresh import st_autorefresh
 
-# --- 1. SYSTEM CONFIG ---
-st.set_page_config(page_title="QE Genix: Command Center", layout="wide")
-st_autorefresh(interval=45 * 1000, key="sniper_heartbeat")
+# --- 1. CONFIG ---
+st.set_page_config(page_title="QE Genix: Apex Sniper", layout="wide")
+st_autorefresh(interval=30 * 1000, key="sniper_heartbeat")
 
 SENSEX_TICKER = "^BSESN"
 
-# --- 2. THE BULLETPROOF DATA SATELLITE ---
-def fetch_robust_data():
+# --- 2. APEX DATA SATELLITE ---
+def fetch_apex_data():
     try:
-        # Spoofing headers to prevent Yahoo Finance 403/Empty Data errors
+        # Standard 2026 User-Agent
+        headers = {'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) Chrome/120.0.0.0 Safari/537.36'}
         session = requests.Session()
-        session.headers.update({
-            'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36'
-        })
+        session.headers.update(headers)
         
-        # Use period='2d' to ensure we have enough data for indicators on a fresh trading day
+        # We fetch 2 days to ensure indicator continuity
         df = yf.download(SENSEX_TICKER, period="2d", interval="5m", progress=False, session=session)
         
-        if df.empty or len(df) < 5:
-            return None
-            
-        # Standardizing multi-index columns if they exist
+        if df.empty: return None
+        
+        # CRITICAL FIX: Flatten Multi-Index columns (the '2026 ghost' error)
         if isinstance(df.columns, pd.MultiIndex):
-            df.columns = df.columns.get_level_values(0)
+            df.columns = [col[0] for col in df.columns]
             
         return df
     except Exception as e:
-        st.sidebar.error(f"Satellite Error: {e}")
         return None
 
-# --- 3. THE DECISION ENGINE ---
-def get_decision(df):
-    close = df['Close']
-    # Zero-Lag EMA for sticky trend detection
-    zlma = ta.zlma(close, length=20)
-    # RSI for momentum confirmation
-    rsi = ta.rsi(close, length=14)
-    
-    curr_p = close.iloc[-1]
-    curr_zlma = zlma.iloc[-1]
-    curr_rsi = rsi.iloc[-1]
-    
-    # DECISION LOGIC (Sticky: Needs 2-candle confirmation)
-    is_bullish = (close.iloc[-1] > curr_zlma) and (close.iloc[-2] > zlma.iloc[-2]) and (curr_rsi > 50)
-    is_bearish = (close.iloc[-1] < curr_zlma) and (close.iloc[-2] < zlma.iloc[-2]) and (curr_rsi < 50)
-    
-    if is_bullish: return "STRONG BUY (CE)", "#2ecc71"
-    if is_bearish: return "STRONG SELL (PE)", "#e74c3c"
-    return "NEUTRAL / WAIT", "#fbc531"
+# --- 3. UI: COMMAND CENTER ---
+st.title("🛰️ QE Genix: Apex Prediction Engine")
+st.caption("v4.4 - Multi-Index Hardened | Jan 1, 2026 Live Status")
 
-# --- 4. UI: COCKPIT ---
-st.title("🛰️ QE Genix: Stable Prediction Engine")
-st.caption("v4.2 - Multi-Path Satellite Sync (2026 Optimized)")
-
-data = fetch_robust_data()
+data = fetch_apex_data()
 
 if data is not None:
-    signal, signal_color = get_decision(data)
-    price = data['Close'].iloc[-1]
+    # DATA PROCESSING
+    close = data['Close']
+    curr_p = float(close.iloc[-1])
     
-    # LADDER CALCULATIONS
-    atm = int(round(price / 100) * 100)
+    # INDICATORS (Zero-Lag + RSI)
+    zlma = ta.zlma(close, length=20)
+    rsi = ta.rsi(close, length=14).iloc[-1]
     
+    # TREND CONFIRMATION (Sticky Logic)
+    # Must be above trend for 2 candles (10 mins) to prevent flipping
+    is_up = (close.iloc[-1] > zlma.iloc[-1]) and (close.iloc[-2] > zlma.iloc[-2]) and (rsi > 52)
+    is_down = (close.iloc[-1] < zlma.iloc[-1]) and (close.iloc[-2] < zlma.iloc[-2]) and (rsi < 48)
+
+    # ACTION BOX
     st.divider()
-    
-    # BIG ACTION BOX
+    if is_up:
+        sig, color, side = "STRONG BUY", "#2ecc71", "CALL (CE)"
+    elif is_down:
+        sig, color, side = "STRONG SELL", "#e74c3c", "PUT (PE)"
+    else:
+        sig, color, side = "NEUTRAL / HOLD", "#fbc531", "CASH"
+
     st.markdown(f"""
-        <div style="background-color:{signal_color}22; border:5px solid {signal_color}; padding:40px; border-radius:20px; text-align:center;">
-            <p style="color:{signal_color}; font-weight:bold; letter-spacing:2px;">SATELLITE DECISION</p>
-            <h1 style="color:white; font-size:60px; margin:10px 0;">{signal}</h1>
-            <p style="color:#aaa;">Target Strike: SENSEX {atm}</p>
+        <div style="background-color:{color}22; border:5px solid {color}; padding:40px; border-radius:15px; text-align:center;">
+            <p style="color:{color}; font-weight:bold; letter-spacing:2px;">DIRECTIONAL BIAS</p>
+            <h1 style="color:white; font-size:55px; margin:10px 0;">{sig}: {side}</h1>
+            <p style="color:#aaa;">Confirmed on 5m Trend-Lock Protocol</p>
         </div>
     """, unsafe_allow_html=True)
 
-    # VITALS
+    # TRADE TICKET
+    atm = int(round(curr_p / 100) * 100)
     col1, col2, col3 = st.columns(3)
-    col1.metric("Sensex Spot", f"{price:,.2f}")
-    col2.metric("Target Strike (ATM)", f"{atm}")
-    col3.metric("Trend Strength", "High" if abs(data['Close'].iloc[-1] - data['Close'].iloc[-10]) > 50 else "Low")
-
+    col1.metric("Sensex Spot", f"{curr_p:,.2f}")
+    col2.metric("Target Strike", f"{atm}")
+    col3.metric("RSI Momentum", f"{rsi:.1f}")
+    
 else:
-    st.warning("📡 Satellite Pulse Weak. Attempting to reconnect via Spoofed Handshake...")
-    st.info("The Indian market is OPEN today (Jan 1, 2026), but data providers are lagging. Please wait for the auto-refresh.")
+    st.error("📡 Satellite Link Interrupted.")
+    st.info("Yahoo Finance is blocking the session. Trying to bypass...")
