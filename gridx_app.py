@@ -2,81 +2,81 @@ import streamlit as st
 import pandas as pd
 import yfinance as yf
 import pandas_ta as ta
-import time
-import random
+import numpy as np
 from streamlit_autorefresh import st_autorefresh
 
-# --- 1. CONFIG ---
-st.set_page_config(page_title="QE Genix: Stealth Sniper", layout="wide")
-# Slowing down the heartbeat to 90 seconds to avoid being banned again
-st_autorefresh(interval=90 * 1000, key="sniper_heartbeat")
+# --- 1. CONFIG & HEARTBEAT ---
+st.set_page_config(page_title="QE Genix: Apex Sniper", layout="wide")
+st_autorefresh(interval=60 * 1000, key="sniper_heartbeat")
 
 SENSEX_TICKER = "^BSESN"
 
-# --- 2. STEALTH DATA SATELLITE ---
-def fetch_stealth_data():
-    # List of various browsers to rotate identity
-    agents = [
-        'Mozilla/5.0 (Windows NT 10.0; Win64; x64) Chrome/119.0.0.0 Safari/537.36',
-        'Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/118.0.0.0 Safari/537.36',
-        'Mozilla/5.0 (X11; Linux x86_64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/119.0.0.0 Safari/537.36'
-    ]
-    
+# --- 2. SATELLITE ENGINE WITH FALLBACK ---
+def fetch_data_with_fallback():
     try:
-        # Create a new session for every fetch to clear cookies
-        session = yf.utils.get_tld_auth_handler().get_session()
-        session.headers.update({'User-Agent': random.choice(agents)})
-        
-        # Adding a small random sleep to mimic human behavior
-        time.sleep(random.uniform(1, 3))
-        
-        df = yf.download(SENSEX_TICKER, period="5d", interval="5m", progress=False, session=session)
-        
-        if df.empty: return None
-        if isinstance(df.columns, pd.MultiIndex):
-            df.columns = [col[0] for col in df.columns]
-        return df
-    except Exception:
-        return None
+        # Attempt stealth fetch
+        df = yf.download(SENSEX_TICKER, period="2d", interval="5m", progress=False)
+        if df.empty: return None, "Rate Limited"
+        if isinstance(df.columns, pd.MultiIndex): df.columns = [col[0] for col in df.columns]
+        return df, "Live"
+    except:
+        return None, "Connection Blocked"
 
-# --- 3. UI: COMMAND CENTER ---
-st.title("🛰️ QE Genix: Stealth Sniper v4.5")
-st.caption("Status: Rate-Limit Avoidance Active | Interval: 90s")
+# --- 3. UI: COCKPIT ---
+st.title("🛰️ QE Genix: Sensex Tactical Engine")
+st.caption("v4.6 - Zero-Downtime Hybrid Protocol (Jan 1, 2026)")
 
-data = fetch_stealth_data()
+data, status = fetch_data_with_fallback()
 
-if data is not None:
+# --- 4. THE MANUAL TACTICAL BRIDGE ---
+with st.sidebar:
+    st.header("🛠️ Tactical Override")
+    override = st.toggle("Enable Manual Entry", value=(status != "Live"))
+    
+    if override:
+        st.warning("Manual Mode Active: Enter price from broker.")
+        manual_price = st.number_input("Current Sensex Spot:", value=85220.0, step=1.0)
+        manual_trend = st.selectbox("Current 5m Trend (from chart):", ["Upward", "Downward", "Sideways"])
+
+# --- 5. LOGIC PROCESSING ---
+if not override and data is not None:
+    # AUTOMATED LOGIC
     close = data['Close']
     curr_p = float(close.iloc[-1])
-    
-    # STICKY LOGIC (The "Decision Lock")
-    zlma = ta.zlma(close, length=20)
+    zlma = ta.zlma(close, length=20).iloc[-1]
     rsi = ta.rsi(close, length=14).iloc[-1]
     
-    # Must hold for 2 candles (10 mins) + RSI Confirmation
-    is_up = (close.iloc[-1] > zlma.iloc[-1]) and (close.iloc[-2] > zlma.iloc[-2]) and (rsi > 55)
-    is_down = (close.iloc[-1] < zlma.iloc[-1]) and (close.iloc[-2] < zlma.iloc[-2]) and (rsi < 45)
-
-    st.divider()
-    if is_up:
-        sig, color = "STRONG BUY (CE)", "#2ecc71"
-    elif is_down:
-        sig, color = "STRONG SELL (PE)", "#e74c3c"
-    else:
-        sig, color = "NEUTRAL (WAIT)", "#fbc531"
-
-    st.markdown(f"""
-        <div style="background-color:{color}22; border:5px solid {color}; padding:40px; border-radius:15px; text-align:center;">
-            <h1 style="color:white; font-size:50px;">{sig}</h1>
-            <p style="color:#aaa;">Target: SENSEX {int(round(curr_p/100)*100)} Strike</p>
-        </div>
-    """, unsafe_allow_html=True)
-
-    # VITALS
-    col1, col2 = st.columns(2)
-    col1.metric("Sensex Spot", f"{curr_p:,.2f}")
-    col2.metric("RSI Momentum", f"{rsi:.1f}")
-
+    is_up = (curr_p > zlma) and (rsi > 52)
+    is_down = (curr_p < zlma) and (rsi < 48)
+    mode_label = "📡 SATELLITE SYNC"
 else:
-    st.error("🛑 SATELLITE BLOCKED: Yahoo Finance is still rate-limiting your IP.")
-    st.info("Wait 5-10 minutes without refreshing. The engine will auto-reconnect once the block expires.")
+    # MANUAL LOGIC (Bridge)
+    curr_p = manual_price if override else 85220.0
+    is_up = (manual_trend == "Upward")
+    is_down = (manual_trend == "Downward")
+    rsi = 50.0 # Neutral default
+    mode_label = "🕹️ MANUAL BRIDGE"
+
+# --- 6. EXECUTION DISPLAY ---
+st.divider()
+
+if is_up:
+    sig, color, side = "STRONG BUY", "#2ecc71", "CALL (CE)"
+elif is_down:
+    sig, color, side = "STRONG SELL", "#e74c3c", "PUT (PE)"
+else:
+    sig, color, side = "NEUTRAL / WAIT", "#fbc531", "CASH"
+
+st.markdown(f"""
+    <div style="background-color:{color}22; border:5px solid {color}; padding:40px; border-radius:15px; text-align:center;">
+        <p style="color:{color}; font-weight:bold; letter-spacing:2px;">{mode_label}</p>
+        <h1 style="color:white; font-size:55px; margin:10px 0;">{sig}: {side}</h1>
+        <p style="color:#aaa;">Targeting ATM Strike: {int(round(curr_p/100)*100)}</p>
+    </div>
+""", unsafe_allow_html=True)
+
+# METRICS
+m1, m2, m3 = st.columns(3)
+m1.metric("Current Spot", f"{curr_p:,.2f}")
+m2.metric("Target Strike", f"{int(round(curr_p/100)*100)}")
+m3.metric("System Health", status)
